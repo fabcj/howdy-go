@@ -9,9 +9,9 @@ pkgrel=1
 pkgdesc="Windows Hello style facial authentication for Linux, with the compare step in Go"
 arch=('x86_64')
 url="https://github.com/fabcj/howdy-go"
-license=('MIT')
+license=('MIT' 'Apache-2.0')
 makedepends=('git' 'go' 'meson' 'ninja' 'cmake' 'pkgconf' 'python')
-depends=('dlib' 'libinih' 'libevdev' 'pam' 'glibc')
+depends=('dlib' 'onnxruntime' 'libinih' 'libevdev' 'pam' 'glibc')
 optdepends=('python-gobject: howdy-gtk login popup and settings window'
             'gtk3: howdy-gtk login popup and settings window'
             'python-cairo: howdy-gtk login popup'
@@ -23,6 +23,11 @@ backup=('etc/howdy/config.ini')
 install=howdy.install
 options=('!debug')
 _howdy_commit=d3ab99382f88f043d15f15c1450ab69433892a1c
+# recognizer = sface: YuNet (MIT) and SFace (Apache-2.0) from OpenCV Zoo at a
+# pinned commit. howdy-compare checks the same sha256s before loading them.
+_zoo_commit=48b10fa505aeb51fbd127fc60a5c660040e823b7
+_zoo=https://media.githubusercontent.com/media/opencv/opencv_zoo/$_zoo_commit/models
+_zoo_raw=https://raw.githubusercontent.com/opencv/opencv_zoo/$_zoo_commit/models
 source=(
 	"howdy-go::git+https://github.com/fabcj/howdy-go.git"
 	"howdy::git+https://github.com/boltgolt/howdy.git#commit=$_howdy_commit"
@@ -30,6 +35,10 @@ source=(
 	"https://github.com/davisking/dlib-models/raw/master/mmod_human_face_detector.dat.bz2"
 	"https://github.com/davisking/dlib-models/raw/master/shape_predictor_5_face_landmarks.dat.bz2"
 	"polkit-agent-helper-howdy.conf"
+	"$_zoo/face_detection_yunet/face_detection_yunet_2026may.onnx"
+	"$_zoo/face_recognition_sface/face_recognition_sface_2021dec.onnx"
+	"yunet.LICENSE::$_zoo_raw/face_detection_yunet/LICENSE"
+	"sface.LICENSE::$_zoo_raw/face_recognition_sface/LICENSE"
 	"pam-compare-path.patch"
 )
 sha256sums=('SKIP'
@@ -38,6 +47,10 @@ sha256sums=('SKIP'
             'db9e9e40f092c118d5eb3e643935b216838170793559515541c56a2b50d9fc84'
             '6e787bbebf5c9efdb793f6cd1f023230c4413306605f24f299f12869f95aa472'
             '2283fc4684751caa41e87023755bba5c3468475b6ed632b13a4ac6e9c748c512'
+            'ebafce4e3c118d6554634be5c27ab333b4c047a9a8c3faf1d7cf93101c22f0f0'
+            '0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79'
+            'c83b8120c50ccbd4c4f96edf53141bdd566ebb8f8e9227e415326aa1b1aba958'
+            'cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30'
             '8dc8a727209d7aff8c2a17f21f6a903d4a195d63e2471e758e49e94077704724')
 
 _compare=/usr/lib/howdy-go/howdy-compare
@@ -68,7 +81,8 @@ build() {
 		-X howdy-go/internal/cli.Version=$pkgver \
 		-X $p.ConfigDir=/etc/howdy -X $p.UserModelsDir=/etc/howdy/models \
 		-X $p.DlibDataDir=/usr/share/dlib-data -X $p.LogPath=/var/log/howdy \
-		-X $p.DataDir=/usr/share/howdy -X $p.ModelOwner=0" \
+		-X $p.DataDir=/usr/share/howdy -X $p.ModelOwner=0 \
+		-X $p.ONNXDir=/usr/share/howdy-go/onnx -X $p.SFaceModelsDir=/etc/howdy/models-sface" \
 		./cmd/howdy ./cmd/howdy-compare ./cmd/save-frontal-detector
 
 	cd "$srcdir"
@@ -104,6 +118,10 @@ package() {
 	install -Dm644 howdy-go/LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 	install -Dm644 howdy/LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE.howdy"
 	install -Dm644 *.dat -t "$pkgdir/usr/share/dlib-data"
+	install -Dm644 face_detection_yunet_2026may.onnx face_recognition_sface_2021dec.onnx \
+		-t "$pkgdir/usr/share/howdy-go/onnx"
+	install -Dm644 yunet.LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE.yunet"
+	install -Dm644 sface.LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE.sface"
 	# Loads much faster than dlib's built in copy
 	howdy-go/bin/save-frontal-detector "$pkgdir/usr/share/dlib-data/frontal_face_detector.svm"
 	chmod 644 "$pkgdir/usr/share/dlib-data/frontal_face_detector.svm"

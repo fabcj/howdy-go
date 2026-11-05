@@ -31,8 +31,10 @@ const Available = true
 
 // Models holds the loaded dlib models
 type Models struct {
-	calls chan func()
-	f     *C.hd_face
+	calls    chan func()
+	f        *C.hd_face
+	upsample int
+	useCNN   bool
 }
 
 func errorFrom(buf []C.char) error {
@@ -40,9 +42,10 @@ func errorFrom(buf []C.char) error {
 }
 
 // Load loads the detector (the HOG .svm, or the MMOD CNN with useCNN), the
-// 5 point shape predictor and the ResNet encoder
-func Load(hogPath, cnnPath, shapePath, encoderPath string, useCNN bool) (*Models, error) {
-	m := &Models{calls: make(chan func())}
+// 5 point shape predictor and the ResNet encoder. Detect upsamples images
+// upsample times.
+func Load(hogPath, cnnPath, shapePath, encoderPath string, useCNN bool, upsample int) (*Models, error) {
+	m := &Models{calls: make(chan func()), upsample: upsample, useCNN: useCNN}
 	go func() {
 		runtime.LockOSThread()
 		for fn := range m.calls {
@@ -118,8 +121,14 @@ func (m *Models) Close() {
 
 const maxFaces = 32
 
-// Detect finds faces in a grey image, in dlib's order
-func (m *Models) Detect(g *imgproc.Gray, upsample int, useCNN bool) ([]face.Rect, error) {
+// Detect finds faces in a grey image, in dlib's order, the way Load was told to
+func (m *Models) Detect(g *imgproc.Gray) ([]face.Rect, error) {
+	return m.DetectWith(g, m.upsample, m.useCNN)
+}
+
+// DetectWith is Detect with another upsample, or the other detector (which
+// has to be loaded)
+func (m *Models) DetectWith(g *imgproc.Gray, upsample int, useCNN bool) ([]face.Rect, error) {
 	if len(g.Pix) == 0 || len(g.Pix) != g.W*g.H {
 		return nil, errors.New("empty image")
 	}
@@ -150,7 +159,7 @@ func (m *Models) Detect(g *imgproc.Gray, upsample int, useCNN bool) ([]face.Rect
 
 // Encode finds the landmarks in a face box and returns its descriptor
 func (m *Models) Encode(g *imgproc.Gray, r face.Rect) (face.Encoding, error) {
-	var enc face.Encoding
+	enc := face.Encoding{Descriptor: make([]float64, 128)}
 	if len(g.Pix) == 0 || len(g.Pix) != g.W*g.H {
 		return enc, errors.New("empty image")
 	}

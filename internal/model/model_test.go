@@ -2,6 +2,7 @@ package model
 
 import (
 	"bytes"
+	"fmt"
 	"math/rand/v2"
 	"os"
 	"os/exec"
@@ -219,4 +220,66 @@ func FuzzDecode(f *testing.F) {
 			t.Fatalf("encoding isn't stable:\n%s\n%s", out, out2)
 		}
 	})
+}
+
+// Only encodings from the right encoder whose id and time the .dat file
+// still has may match, each mapped to its own .dat entry. Synthetic
+// numbers only.
+func TestEnrolled(t *testing.T) {
+	vec := func(v float64) []float64 {
+		e := make([]float64, 4)
+		e[0] = v
+		return e
+	}
+	const sf = "sface-2021dec"
+	dat := &Models{}
+	dat.Entries = append(dat.Entries,
+		NewEntry(100, "a", 0, vec(0)),
+		NewEntry(200, "b", 2, vec(0)),
+		NewEntry(300, "c", 2, vec(0)), // same id, as Python Howdy can leave it
+	)
+	other := NewModels(4)
+	other.Entries = append(other.Entries,
+		NewTaggedEntry(100, "a", 0, vec(0.1), sf),
+		NewTaggedEntry(100, "gone", 1, vec(0.2), sf),  // removed from .dat
+		NewTaggedEntry(150, "old b", 2, vec(0.3), sf), // id reused since
+		NewTaggedEntry(200, "b", 2, vec(0.4), "another-model"),
+		NewEntry(200, "untagged", 2, vec(0.5)),
+		NewTaggedEntry(300, "c", 2, vec(0.6), sf),
+		NewTaggedEntry(200, "b", 2, vec(0.7), sf),
+	)
+	encs, owner := other.Enrolled(dat, sf)
+	var got []float64
+	for _, e := range encs {
+		got = append(got, e[0])
+	}
+	if fmt.Sprint(got) != "[0.1 0.6 0.7]" || fmt.Sprint(owner) != "[0 2 1]" {
+		t.Fatalf("enrolled %v, owners %v", got, owner)
+	}
+
+	other.Prune(dat)
+	if len(other.Entries) != 5 {
+		t.Errorf("%d entries after pruning, want 5", len(other.Entries))
+	}
+	dat.Entries = dat.Entries[:2]
+	other.Prune(dat)
+	if encs, _ := other.Enrolled(dat, sf); len(encs) != 2 {
+		t.Errorf("after removing c: %v", encs)
+	}
+
+	// Round trip keeps the size, the tag and the time
+	data, err := other.Bytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	back, err := ParseSize(data, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if encs, _ := back.Enrolled(dat, sf); len(encs) != 2 || encs[0][0] != 0.1 {
+		t.Errorf("after a round trip: %v", encs)
+	}
+	if _, err := Parse(data); err == nil {
+		t.Error("4 number encodings parsed as dlib ones")
+	}
 }

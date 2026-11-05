@@ -21,16 +21,21 @@ type Result struct {
 
 // Average drops frames far from the rest (blinks, turning away) and
 // averages the others. Distances are scaled by 10 to match "certainty".
-func Average(encs [][128]float64) (*Result, error) {
+func Average(encs [][]float64) (*Result, error) {
 	n := len(encs)
 	if n == 0 {
 		return nil, errors.New("no encodings")
+	}
+	for _, e := range encs {
+		if len(e) == 0 || len(e) != len(encs[0]) {
+			return nil, errors.New("encodings of different lengths")
+		}
 	}
 	mean := meanOf(encs, nil)
 
 	dist := make([]float64, n)
 	for i := range encs {
-		dist[i] = face.Distance(mean, &encs[i]) * 10
+		dist[i] = face.Distance(mean, encs[i]) * 10
 	}
 	sorted := append([]float64(nil), dist...)
 	sort.Float64s(sorted)
@@ -49,7 +54,7 @@ func Average(encs [][128]float64) (*Result, error) {
 	spread := []float64{}
 	for i := range encs {
 		if keep[i] {
-			spread = append(spread, face.Distance(avg, &encs[i])*10)
+			spread = append(spread, face.Distance(avg, encs[i])*10)
 		}
 	}
 	sort.Float64s(spread)
@@ -63,8 +68,8 @@ func Average(encs [][128]float64) (*Result, error) {
 }
 
 // numpy's mean over axis 0: rows added in order, then divided by the count
-func meanOf(encs [][128]float64, keep []bool) []float64 {
-	sum := make([]float64, 128)
+func meanOf(encs [][]float64, keep []bool) []float64 {
+	sum := make([]float64, len(encs[0]))
 	count := 0
 	for i := range encs {
 		if keep != nil && !keep[i] {

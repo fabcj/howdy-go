@@ -9,13 +9,11 @@ import (
 	"syscall"
 	"time"
 
+	"howdy-go/internal/backend/loader"
 	"howdy-go/internal/camera"
 	"howdy-go/internal/cli"
 	"howdy-go/internal/compare"
 	"howdy-go/internal/config"
-	"howdy-go/internal/dlib"
-	"howdy-go/internal/face"
-	"howdy-go/internal/paths"
 )
 
 func main() {
@@ -48,13 +46,7 @@ func main() {
 			}
 			return c, c.Close, nil
 		},
-		Faces: func(s *config.Settings) (face.Recognizer, error) {
-			m, err := dlib.Load(paths.HOGDetector(), paths.CNNDetector(), paths.ShapePredictor(), paths.Recognizer(), s.UseCNN)
-			if err != nil {
-				return nil, err
-			}
-			return m, nil
-		},
+		Faces: loader.Load,
 		Edit: func(argv []string) error {
 			cmd := exec.Command(argv[0], argv[1:]...)
 			cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr

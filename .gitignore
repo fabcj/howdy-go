@@ -2,6 +2,7 @@
 /bin/
 /howdy-compare
 /howdy
+/face-capture
 
 # face data and camera frames never go in here
 *.dat
@@ -19,3 +20,5 @@ packaging/*/pkg/
 packaging/*/*/
 packaging/*/*.pkg.tar.*
 packaging/*/*.bz2
+packaging/*/*.onnx
+packaging/*/*.LICENSE

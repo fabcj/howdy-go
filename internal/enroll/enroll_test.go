@@ -10,13 +10,14 @@ import (
 )
 
 // Synthetic encodings only, never real face data
-func fake(r *rand.Rand, n int) [][128]float64 {
-	base := [128]float64{}
+func fake(r *rand.Rand, n int) [][]float64 {
+	base := make([]float64, 128)
 	for j := range base {
 		base[j] = r.NormFloat64() * 0.1
 	}
-	out := make([][128]float64, n)
+	out := make([][]float64, n)
 	for i := range out {
+		out[i] = make([]float64, len(base))
 		for j := range base {
 			// float32 values, like dlib's
 			out[i][j] = float64(float32(base[j] + r.NormFloat64()*0.01))

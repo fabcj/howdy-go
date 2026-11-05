@@ -2,6 +2,7 @@ package compare
 
 import (
 	"errors"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -49,7 +50,7 @@ type fakeFaces struct {
 	detected []int // image widths seen by Detect
 }
 
-func (f *fakeFaces) Detect(g *imgproc.Gray, upsample int, cnn bool) ([]face.Rect, error) {
+func (f *fakeFaces) Detect(g *imgproc.Gray) ([]face.Rect, error) {
 	f.detected = append(f.detected, g.W)
 	if g.Pix[0] < 180 {
 		return nil, nil
@@ -59,7 +60,7 @@ func (f *fakeFaces) Detect(g *imgproc.Gray, upsample int, cnn bool) ([]face.Rect
 }
 
 func (f *fakeFaces) Encode(g *imgproc.Gray, r face.Rect) (face.Encoding, error) {
-	var e face.Encoding
+	e := face.Encoding{Descriptor: make([]float64, 128)}
 	e.Descriptor[0] = float64(g.Pix[1]) / 100
 	return e, nil
 }
@@ -250,5 +251,29 @@ func TestSnapshots(t *testing.T) {
 		if got[0][i] != want[i] {
 			t.Errorf("line %d: %q, want %q", i, got[0][i], want[i])
 		}
+	}
+}
+
+// sface matches on cosine similarity: match_threshold 0.9 is a distance of
+// sqrt(0.2) = 0.447 between unit vectors, and reports show the similarity
+func TestSFaceThreshold(t *testing.T) {
+	s := settings()
+	s.Recognizer, s.MatchThreshold = "sface", 0.9
+	s.EndReport = true
+	if d := Threshold(s); math.Abs(d-math.Sqrt(0.2)) > 1e-12 {
+		t.Errorf("threshold %v", d)
+	}
+	// 0.4 from the second encoding: cosine 1 - 0.16/2 = 0.92
+	l, _, _, out := newLoop(s, lit(64, 36, 200, 60))
+	if code := l.Run(); code != Success {
+		t.Fatalf("exit %d", code)
+	}
+	if !strings.Contains(out.String(), "Similarity of winning frame: 0.920\n") {
+		t.Errorf("report:\n%s", out)
+	}
+	// 0.6 away, cosine 0.82
+	l, _, _, _ = newLoop(s, lit(64, 36, 200, 80))
+	if code := l.Run(); code != Timeout {
+		t.Errorf("cosine 0.82 against 0.9 gave exit %d", code)
 	}
 }

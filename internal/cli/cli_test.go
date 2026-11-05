@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"errors"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"howdy-go/internal/backend"
 	"howdy-go/internal/compare"
 	"howdy-go/internal/config"
 	"howdy-go/internal/face"
@@ -65,6 +67,7 @@ type testEnv struct {
 	frames      []*imgproc.Gray
 	faces       int
 	edited      []string
+	loaded      []string // recognisers Faces was asked for
 	clock       time.Time
 	// a fake ctrl+C once the camera has given this many frames
 	stopAfter int
@@ -74,10 +77,11 @@ type testEnv struct {
 func setup(t *testing.T) *testEnv {
 	t.Helper()
 	dir := t.TempDir()
-	old := []string{paths.ConfigDir, paths.UserModelsDir, paths.DlibDataDir, paths.LogPath, paths.DataDir, paths.ModelOwner}
+	old := []string{paths.ConfigDir, paths.UserModelsDir, paths.DlibDataDir, paths.LogPath, paths.DataDir, paths.ModelOwner,
+		paths.ONNXDir, paths.SFaceModelsDir}
 	t.Cleanup(func() {
-		paths.ConfigDir, paths.UserModelsDir, paths.DlibDataDir, paths.LogPath, paths.DataDir, paths.ModelOwner =
-			old[0], old[1], old[2], old[3], old[4], old[5]
+		paths.ConfigDir, paths.UserModelsDir, paths.DlibDataDir, paths.LogPath, paths.DataDir, paths.ModelOwner,
+			paths.ONNXDir, paths.SFaceModelsDir = old[0], old[1], old[2], old[3], old[4], old[5], old[6], old[7]
 	})
 	paths.ConfigDir = dir
 	paths.UserModelsDir = filepath.Join(dir, "models")
@@ -85,6 +89,8 @@ func setup(t *testing.T) *testEnv {
 	paths.LogPath = filepath.Join(dir, "log")
 	paths.DataDir = dir
 	paths.ModelOwner = strconv.Itoa(os.Getuid())
+	paths.ONNXDir = filepath.Join(dir, "onnx")
+	paths.SFaceModelsDir = filepath.Join(dir, "models-sface")
 	os.Chmod(dir, 0o755)
 	os.Mkdir(paths.DlibDataDir, 0o755)
 	os.WriteFile(paths.ShapePredictor(), nil, 0o644)
@@ -105,7 +111,10 @@ func setup(t *testing.T) *testEnv {
 		Camera: func(s *config.Settings) (compare.Camera, func(), error) {
 			return &fakeCam{te: te}, func() {}, nil
 		},
-		Faces: func(s *config.Settings) (face.Recognizer, error) { return &fakeFaces{te: te}, nil },
+		Faces: func(s *config.Settings, name string) (face.Recognizer, error) {
+			te.loaded = append(te.loaded, name)
+			return &fakeFaces{te: te}, nil
+		},
 		Edit: func(argv []string) error {
 			te.edited = argv
 			return nil
@@ -145,13 +154,13 @@ type fakeFaces struct {
 	n  int
 }
 
-func (f *fakeFaces) Detect(*imgproc.Gray, int, bool) ([]face.Rect, error) {
+func (f *fakeFaces) Detect(*imgproc.Gray) ([]face.Rect, error) {
 	return make([]face.Rect, f.te.faces), nil
 }
 
 // Synthetic descriptors that differ a little per frame
 func (f *fakeFaces) Encode(*imgproc.Gray, face.Rect) (face.Encoding, error) {
-	var e face.Encoding
+	e := face.Encoding{Descriptor: make([]float64, 128)}
 	for i := range e.Descriptor {
 		e.Descriptor[i] = float64(float32(0.01*float64(i%7) + 0.001*float64(f.n%3)))
 	}
@@ -423,5 +432,117 @@ func TestTest(t *testing.T) {
 		if f := strings.Fields(l); len(f) == 7 && f[3] == "1" && f[6] != "desk" && f[6] != "match" {
 			t.Errorf("face line %q", l)
 		}
+	}
+}
+
+// With recognizer = sface, add writes a dlib model to the .dat file and an
+// sface one under the same id, and remove and clear take both away
+func TestAddSFace(t *testing.T) {
+	te := setup(t)
+	te.frames = []*imgproc.Gray{litFrame()}
+	te.faces = 1
+	cfg, _ := os.ReadFile(paths.ConfigFile())
+	cfg = bytes.Replace(cfg, []byte("[core]\n"), []byte("[core]\nrecognizer = sface\n"), 1)
+	os.WriteFile(paths.ConfigFile(), cfg, 0o644)
+
+	if code := te.run("add", "-y"); code != 1 || !strings.Contains(te.out.String(), "The sface models are missing") {
+		t.Fatalf("add without the ONNX files: exit %d %q", code, te.out.String())
+	}
+	os.Mkdir(paths.ONNXDir, 0o755)
+	os.WriteFile(filepath.Join(paths.ONNXDir, backend.YuNetFile), nil, 0o644)
+	os.WriteFile(filepath.Join(paths.ONNXDir, backend.SFaceFile), nil, 0o644)
+
+	te.loaded = nil
+	for i := 0; i < 2; i++ {
+		if code := te.run("add", "-y"); code != 0 {
+			t.Fatalf("add: exit %d\n%s%s", code, te.out.String(), te.errOut.String())
+		}
+	}
+	if strings.Join(te.loaded, " ") != "dlib sface dlib sface" {
+		t.Errorf("loaded %v", te.loaded)
+	}
+	if !strings.Contains(te.out.String(), "sface: used 5 of 5 frames, least similar ") {
+		t.Errorf("add output:\n%s", te.out.String())
+	}
+	dat, err := model.Load(paths.UserModelsDir, "alice", os.Getuid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sf, err := model.LoadSize(paths.SFaceModelsDir, "alice", os.Getuid(), backend.SFaceSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if encs, owner := sf.Enrolled(dat, backend.SFaceEncoder); len(encs) != 2 || owner[0] != 0 || owner[1] != 1 {
+		t.Fatalf("sface models %v %v", encs, owner)
+	}
+	var norm float64
+	for _, v := range sf.Entries[0].Values["data"].([]model.Value)[0].([]model.Value) {
+		norm += v.(float64) * v.(float64)
+	}
+	if math.Abs(norm-1) > 1e-9 {
+		t.Errorf("stored sface descriptor has length^2 %v", norm)
+	}
+	st, err := os.Stat(filepath.Join(paths.SFaceModelsDir, "alice.dat"))
+	if err != nil || st.Mode().Perm() != 0o640 {
+		t.Errorf("sface file %v %v", st, err)
+	}
+
+	if code := te.run("remove", "0", "-y"); code != 0 {
+		t.Fatalf("remove: %d %q", code, te.out.String())
+	}
+	sf, _ = model.LoadSize(paths.SFaceModelsDir, "alice", os.Getuid(), backend.SFaceSize)
+	if len(sf.Entries) != 1 {
+		t.Errorf("%d sface entries after removing one of two", len(sf.Entries))
+	}
+	if code := te.run("clear", "-y"); code != 0 {
+		t.Fatalf("clear: %d %q", code, te.out.String())
+	}
+	if _, err := os.Stat(filepath.Join(paths.SFaceModelsDir, "alice.dat")); !os.IsNotExist(err) {
+		t.Errorf("sface file left after clear: %v", err)
+	}
+}
+
+// A model removed from the .dat file by something other than howdy-go
+// (howdy-gtk, Python Howdy) leaves its sface descriptor behind. When a dlib
+// add later reuses the id, that descriptor must not come back.
+func TestSFaceOrphanNotRevived(t *testing.T) {
+	te := setup(t)
+	te.frames = []*imgproc.Gray{litFrame()}
+	te.faces = 1
+	os.Mkdir(paths.ONNXDir, 0o755)
+	os.WriteFile(filepath.Join(paths.ONNXDir, backend.YuNetFile), nil, 0o644)
+	os.WriteFile(filepath.Join(paths.ONNXDir, backend.SFaceFile), nil, 0o644)
+	base, _ := os.ReadFile(paths.ConfigFile())
+	use := func(name string) {
+		cfg := bytes.Replace(base, []byte("[core]\n"), []byte("[core]\nrecognizer = "+name+"\n"), 1)
+		os.WriteFile(paths.ConfigFile(), cfg, 0o644)
+	}
+
+	use("sface")
+	for i := 0; i < 2; i++ {
+		if code := te.run("add", "-y"); code != 0 {
+			t.Fatalf("add: exit %d\n%s", code, te.out.String())
+		}
+	}
+	// Model 1 removed from the .dat file only
+	dat, _ := model.Load(paths.UserModelsDir, "alice", os.Getuid())
+	dat.Entries = dat.Entries[:1]
+	if err := model.Save(paths.UserModelsDir, "alice", os.Getgid(), dat); err != nil {
+		t.Fatal(err)
+	}
+	te.clock = te.clock.Add(time.Hour)
+	use("dlib")
+	if code := te.run("add", "-y"); code != 0 {
+		t.Fatalf("dlib add: exit %d\n%s", code, te.out.String())
+	}
+
+	dat, _ = model.Load(paths.UserModelsDir, "alice", os.Getuid())
+	if id, _ := model.ID(dat.Entries[1]); id != 1 {
+		t.Fatalf("the dlib add got id %d, this test needs it to reuse 1", id)
+	}
+	s := &config.Settings{Recognizer: "sface"}
+	known, owner, err := backend.Known(s, "alice", dat)
+	if err != nil || len(known) != 1 || owner[0] != 0 {
+		t.Errorf("sface matches %d descriptors, owners %v, err %v; want only model 0's", len(known), owner, err)
 	}
 }

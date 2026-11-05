@@ -37,6 +37,11 @@ var ErrNoModel = errors.New("no face model")
 // symlink, and not writable by anyone else. The models dir is held to the
 // same rules.
 func Load(dir, user string, owner int) (*Models, error) {
+	return LoadSize(dir, user, owner, EncodingSize)
+}
+
+// LoadSize is Load for encodings of another length than dlib's
+func LoadSize(dir, user string, owner, size int) (*Models, error) {
 	path, err := Path(dir, user)
 	if err != nil {
 		return nil, err
@@ -76,7 +81,7 @@ func Load(dir, user string, owner int) (*Models, error) {
 	if len(data) > maxFileSize {
 		return nil, fmt.Errorf("%s is too big", path)
 	}
-	return Parse(data)
+	return ParseSize(data, size)
 }
 
 func checkOwned(path string, owner int, dir bool) error {

@@ -25,7 +25,7 @@ func TestDistanceAgainstNumpy(t *testing.T) {
 			known[i][j] = r.NormFloat64() * 0.1
 		}
 	}
-	var probe [128]float64
+	probe := make([]float64, 128)
 	for j := range probe {
 		probe[j] = float64(float32(r.NormFloat64() * 0.1))
 	}
@@ -48,12 +48,27 @@ json.dump({"d": m.tolist(), "i": int(np.argmin(m))}, sys.stdout)`)
 		t.Fatal(err)
 	}
 	for i, k := range known {
-		if got := Distance(k, &probe); math.Float64bits(got) != math.Float64bits(want.D[i]) {
+		if got := Distance(k, probe); math.Float64bits(got) != math.Float64bits(want.D[i]) {
 			t.Errorf("distance %d: %v, numpy %v", i, got, want.D[i])
 		}
 	}
-	if _, i := Best(known, &probe); i != want.I {
+	if _, i := Best(known, probe); i != want.I {
 		t.Errorf("best %d, numpy %d", i, want.I)
+	}
+}
+
+// A stored encoding of another length must never look like a match
+func TestDistanceLengthMismatch(t *testing.T) {
+	a, b := make([]float64, 128), make([]float64, 512)
+	if d := Distance(a, b); !math.IsNaN(d) {
+		t.Errorf("distance between 128 and 512 numbers = %v, want NaN", d)
+	}
+	d, i := Best([][]float64{b}, a)
+	if i != 0 || !math.IsNaN(d) || 0 < d && d < 1 {
+		t.Errorf("best = %v, %d", d, i)
+	}
+	if d := Distance(b, b); d != 0 {
+		t.Errorf("distance of 512 numbers to itself = %v", d)
 	}
 }
 

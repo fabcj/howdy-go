@@ -63,11 +63,35 @@ func TestFallbacks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := Settings{Certainty: 3.5, RequiredMatches: 1, Timeout: 4, DevicePath: "/dev/video0",
+	want := Settings{Recognizer: "dlib", MatchThreshold: 0.363,
+		Certainty: 3.5, RequiredMatches: 1, Timeout: 4, DevicePath: "/dev/video0",
 		WarnNoDevice: true, MaxHeight: 320, FrameWidth: -1, FrameHeight: -1, DeviceFPS: -1,
 		DarkThreshold: 60, DetectionUpsample: 1, EnrollFrames: 15, Exposure: -1}
 	if *s != want {
 		t.Errorf("got %+v\nwant %+v", *s, want)
+	}
+}
+
+func TestRecognizerSettings(t *testing.T) {
+	for _, c := range []struct {
+		core, video string
+		ok          bool
+	}{
+		{"recognizer = sface", "match_threshold = 0.4", true},
+		{"recognizer = dlib", "", true},
+		{"recognizer = SFace", "", false},
+		{"recognizer = arcface", "", false},
+		{"", "match_threshold = 0", false},
+		{"", "match_threshold = 1", false},
+		{"", "match_threshold = -0.5", false},
+	} {
+		f, err := Parse([]byte("[core]\n" + c.core + "\n[video]\ndevice_path = /dev/video0\n" + c.video + "\n"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Load(f); (err == nil) != c.ok {
+			t.Errorf("%q %q: err %v", c.core, c.video, err)
+		}
 	}
 }
 

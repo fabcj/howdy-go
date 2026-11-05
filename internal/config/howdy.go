@@ -11,6 +11,11 @@ import (
 type Settings struct {
 	UseCNN bool
 
+	// Recognizer is dlib (Howdy's) or sface (YuNet and SFace). MatchThreshold
+	// is sface's least cosine similarity for a match, certainty is dlib's.
+	Recognizer     string
+	MatchThreshold float64
+
 	Certainty         float64 // as written, compare divides it by 10
 	RequiredMatches   int
 	Timeout           int
@@ -63,6 +68,11 @@ func Load(f *File) (*Settings, error) {
 	}
 
 	b(&s.UseCNN, "core", "use_cnn", false)
+	rec, err := f.String("core", "recognizer", "dlib")
+	s.Recognizer = rec
+	errs = append(errs, err)
+	// SFace's own threshold in OpenCV Zoo (sface.py)
+	fl(&s.MatchThreshold, "video", "match_threshold", 0.363)
 	fl(&s.Certainty, "video", "certainty", 3.5)
 	i(&s.RequiredMatches, "video", "required_matches", 1)
 	i(&s.Timeout, "video", "timeout", 4)
@@ -97,6 +107,12 @@ func Load(f *File) (*Settings, error) {
 	s.EnrollFrames = max(1, s.EnrollFrames)
 	if s.DetectionUpsample < 0 || s.DetectionUpsample > 4 {
 		return nil, fmt.Errorf("[video] detection_upsample must be between 0 and 4, not %d", s.DetectionUpsample)
+	}
+	if s.Recognizer != "dlib" && s.Recognizer != "sface" {
+		return nil, fmt.Errorf("[core] recognizer must be dlib or sface, not %q", s.Recognizer)
+	}
+	if !(s.MatchThreshold > 0 && s.MatchThreshold < 1) {
+		return nil, fmt.Errorf("[video] match_threshold must be between 0 and 1, not %v", s.MatchThreshold)
 	}
 	return &s, nil
 }

@@ -1,5 +1,5 @@
 // Package compare is the frame loop of howdy-compare, a port of the main
-// loop in Howdy's compare.py. See section 4.3 of docs/parity.md.
+// loop in Howdy's compare.py
 package compare
 
 import (
@@ -77,6 +77,16 @@ type state struct {
 	loopStart                time.Time
 }
 
+// Threshold is the distance a face has to be under to match: certainty/10
+// for dlib, and for sface the distance between unit vectors at
+// match_threshold's cosine similarity
+func Threshold(s *config.Settings) float64 {
+	if s.Recognizer == "sface" {
+		return face.CosineDistance(s.MatchThreshold)
+	}
+	return s.Certainty / 10
+}
+
 // Run scans frames until a match, the timeout or a camera failure, and
 // returns the exit code
 func (l *Loop) Run() int {
@@ -86,7 +96,7 @@ func (l *Loop) Run() int {
 		now = time.Now
 	}
 	st := state{lowest: 10, lastMatch: -1}
-	certainty := s.Certainty / 10
+	certainty := Threshold(s)
 	timeout := time.Duration(s.Timeout) * time.Second
 	wantSnaps := l.Snapshot != nil && (s.SaveFailed || s.SaveSuccessful)
 
@@ -142,7 +152,8 @@ func (l *Loop) Run() int {
 			continue
 		}
 
-		// Only ever shrink, see Deviations in the spec
+		// Only ever shrink. compare.py also enlarges frames smaller than
+		// max_height, which costs time and helps nothing
 		height := raw.H
 		if s.Rotate == 2 {
 			height = raw.W
@@ -169,7 +180,7 @@ func (l *Loop) Run() int {
 		}
 		scaled.w, scaled.h = raw.W, raw.H
 
-		rects, err := l.Faces.Detect(gs, s.DetectionUpsample, s.UseCNN)
+		rects, err := l.Faces.Detect(gs)
 		if err != nil {
 			fmt.Fprintln(l.Out, "Face detection failed:", err)
 			return Abort
@@ -180,7 +191,7 @@ func (l *Loop) Run() int {
 				fmt.Fprintln(l.Out, "Face encoding failed:", err)
 				return Abort
 			}
-			match, index := face.Best(l.Known, &enc.Descriptor)
+			match, index := face.Best(l.Known, enc.Descriptor)
 			if index < 0 {
 				return NoFaceModel
 			}
@@ -258,7 +269,11 @@ func (l *Loop) report(st *state, total, searching time.Duration, nativeW, native
 	fmt.Fprintf(w, "\nFrames searched: %d (%.2f fps)\n", st.frames, float64(st.frames)/searching.Seconds())
 	fmt.Fprintf(w, "Black frames ignored: %d \n", st.blackTries)
 	fmt.Fprintf(w, "Dark frames ignored: %d \n", st.darkTries)
-	fmt.Fprintf(w, "Certainty of winning frame: %.3f\n", match*10)
+	if l.Settings.Recognizer == "sface" {
+		fmt.Fprintf(w, "Similarity of winning frame: %.3f\n", face.Cosine(match))
+	} else {
+		fmt.Fprintf(w, "Certainty of winning frame: %.3f\n", match*10)
+	}
 	if l.Settings.RequiredMatches > 1 {
 		fmt.Fprintf(w, "Frames that matched: %d\n", st.matchedFrames)
 	}
@@ -283,7 +298,13 @@ func (l *Loop) snapshot(st *state, kind string, now func() time.Time) {
 	t := now()
 	elapsed := t.Sub(st.loopStart).Seconds()
 	best := "100"
-	if st.sawFace {
+	bestLine := "Best certainty value: "
+	if l.Settings.Recognizer == "sface" {
+		best, bestLine = "none", "Best similarity value: "
+		if st.sawFace {
+			best = pyfmt.Float(pyfmt.Round(face.Cosine(st.lowest), 2))
+		}
+	} else if st.sawFace {
 		best = pyfmt.Float(pyfmt.Round(st.lowest*10, 1))
 	}
 	fps := "0.0"
@@ -296,6 +317,6 @@ func (l *Loop) snapshot(st *state, kind string, now func() time.Time) {
 		"Scan time: " + pyfmt.Float(pyfmt.Round(elapsed, 2)) + "s",
 		fmt.Sprintf("Frames: %d (%sFPS)", st.frames, fps),
 		"Hostname: " + l.Hostname,
-		"Best certainty value: " + best,
+		bestLine + best,
 	})
 }

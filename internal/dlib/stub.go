@@ -18,13 +18,15 @@ var errNoDlib = errors.New("built without dlib (nodlib tag)")
 
 type Models struct{}
 
-func Load(hogPath, cnnPath, shapePath, encoderPath string, useCNN bool) (*Models, error) {
+func Load(hogPath, cnnPath, shapePath, encoderPath string, useCNN bool, upsample int) (*Models, error) {
 	return nil, errNoDlib
 }
 
 func (m *Models) Close() {}
 
-func (m *Models) Detect(*imgproc.Gray, int, bool) ([]face.Rect, error) { return nil, errNoDlib }
+func (m *Models) Detect(*imgproc.Gray) ([]face.Rect, error) { return nil, errNoDlib }
+
+func (m *Models) DetectWith(*imgproc.Gray, int, bool) ([]face.Rect, error) { return nil, errNoDlib }
 
 func (m *Models) Encode(*imgproc.Gray, face.Rect) (face.Encoding, error) {
 	return face.Encoding{}, errNoDlib

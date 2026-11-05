@@ -8,32 +8,48 @@ import (
 	"howdy-go/internal/imgproc"
 )
 
-// Rect is a face box, edges included as in dlib
+// Rect is a face box, edges included as in dlib. Detectors that find the
+// eyes, nose and mouth corners too (YuNet) set Landmarks, in image order:
+// the eye on the image's left first, then the other eye, the nose tip and
+// the mouth corners in the same order.
 type Rect struct {
 	Left, Top, Right, Bottom int
+	Landmarks                [5][2]float32
+	HasLandmarks             bool
 }
 
-// Encoding is a face descriptor and the 5 landmarks it was aligned with
+// Encoding is a face descriptor and the 5 landmarks it was aligned with.
+// How long the descriptor is depends on the recogniser, 128 for dlib.
 type Encoding struct {
-	Descriptor [128]float64
+	Descriptor []float64
 	Parts      [5][2]int
 }
 
-// Recognizer finds faces and describes them
+// Recognizer finds faces and describes them. How it detects (dlib's
+// upsample, HOG or CNN) is fixed when it's loaded.
 type Recognizer interface {
-	Detect(g *imgproc.Gray, upsample int, useCNN bool) ([]Rect, error)
+	Detect(g *imgproc.Gray) ([]Rect, error)
+	// Encode returns a new Descriptor every call: howdy add keeps them
 	Encode(g *imgproc.Gray, r Rect) (Encoding, error)
 	Close()
 }
 
-// Distance is numpy.linalg.norm(a - b)
-func Distance(a []float64, b *[128]float64) float64 {
-	var sq [128]float64
+// Distance is numpy.linalg.norm(a - b). It's NaN when the lengths differ,
+// which no certainty check passes.
+func Distance(a, b []float64) float64 {
+	if len(a) != len(b) {
+		return math.NaN()
+	}
+	var buf [512]float64
+	sq := buf[:0]
+	if len(a) > len(buf) {
+		sq = make([]float64, 0, len(a))
+	}
 	for i, v := range a {
 		d := v - b[i]
-		sq[i] = d * d
+		sq = append(sq, d*d)
 	}
-	return math.Sqrt(PairwiseSum(sq[:len(a)]))
+	return math.Sqrt(PairwiseSum(sq))
 }
 
 // PairwiseSum adds up v in the order numpy's pairwise summation does, so
@@ -67,10 +83,35 @@ func PairwiseSum(v []float64) float64 {
 	return PairwiseSum(v[:m]) + PairwiseSum(v[m:])
 }
 
+// CosineDistance is the Euclidean distance between two unit vectors whose
+// cosine similarity is cos. Matching by one is matching by the other.
+func CosineDistance(cos float64) float64 {
+	return math.Sqrt(2 - 2*cos)
+}
+
+// Cosine undoes CosineDistance
+func Cosine(dist float64) float64 {
+	return 1 - dist*dist/2
+}
+
+// Unit scales v to length 1, as an averaged unit descriptor needs
+func Unit(v []float64) []float64 {
+	var sum float64
+	for _, x := range v {
+		sum += x * x
+	}
+	n := math.Sqrt(sum)
+	out := make([]float64, len(v))
+	for i, x := range v {
+		out[i] = x / n
+	}
+	return out
+}
+
 // Best returns the smallest distance from enc to any of the known encodings
 // and its index, like numpy's argmin (the first one on a tie). index is -1
 // with no known encodings.
-func Best(known [][]float64, enc *[128]float64) (dist float64, index int) {
+func Best(known [][]float64, enc []float64) (dist float64, index int) {
 	index = -1
 	for i, k := range known {
 		d := Distance(k, enc)

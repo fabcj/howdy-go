@@ -3,8 +3,9 @@
 // Two different parsers read that file: Python's configparser (the old
 // compare and CLI) and inih's INIReader (the PAM module). They disagree on
 // some input, so this parser only accepts files where both would read the
-// same thing, and refuses the rest instead of guessing. See section 3 of
-// docs/parity.md.
+// same thing, and refuses the rest instead of guessing: duplicate keys and
+// sections, sections differing only in case, values with " ;", nan and
+// inf, % interpolation and booleans neither parser agrees on.
 package config
 
 import (

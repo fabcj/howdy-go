@@ -55,6 +55,9 @@ elif op == "ccw":
     out = cv2.rotate(img, cv2.ROTATE_90_COUNTERCLOCKWISE)
 elif op == "cw":
     out = cv2.rotate(img, cv2.ROTATE_90_CLOCKWISE)
+elif op.startswith("warp"):
+    m = np.array([float(v) for v in op[4:].split(",")]).reshape(2, 3)
+    out = cv2.warpAffine(img, m, (112, 112), flags=cv2.INTER_LINEAR)
 np.ascontiguousarray(out).tofile(dst)
 sys.stdout.write("%d %d" % (out.shape[1] if out.ndim > 1 else 0, out.shape[0]))
 `
@@ -150,5 +153,24 @@ func TestRotateMatchesOpenCV(t *testing.T) {
 	want, _, _ = opencv(t, "cw", g)
 	if !bytes.Equal(RotateCW(g).Pix, want) {
 		t.Error("clockwise differs")
+	}
+}
+
+// Face alignments: shrink, rotate a little, shift, and one that reaches
+// past the image edge
+func TestWarpAffineMatchesOpenCV(t *testing.T) {
+	mats := [][6]float64{
+		{0.9375, 0.0612, -182.25, -0.0612, 0.9375, -118.5},
+		{1.2041, -0.1093, -220.7, 0.1093, 1.2041, -150.3},
+		{0.51, 0.0, 3.25, 0.0, 0.51, -1.75},
+		{1.73, 0.31, -40.1, -0.31, 1.73, 20.6},
+		{1, 0, 0, 0, 1, 0},
+	}
+	for name, g := range testImages() {
+		for i, m := range mats {
+			op := fmt.Sprintf("warp%v,%v,%v,%v,%v,%v", m[0], m[1], m[2], m[3], m[4], m[5])
+			want, _, _ := opencv(t, op, g)
+			compare(t, fmt.Sprintf("%s m%d", name, i), WarpAffine(g, m, 112, 112).Pix, want, 0)
+		}
 	}
 }

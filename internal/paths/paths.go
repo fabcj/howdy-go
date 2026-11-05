@@ -14,6 +14,12 @@ var (
 	LogPath       = "/var/log/howdy"
 	DataDir       = "/usr/share/howdy"
 
+	// The sface backend: its ONNX models, and its descriptors, one file per
+	// user like the models dir. Not inside the models dir, where howdy-gtk
+	// takes every file for a user
+	ONNXDir        = "/usr/share/howdy-go/onnx"
+	SFaceModelsDir = "/etc/howdy/models-sface"
+
 	// Who must own the model files. Only test builds change it
 	ModelOwner = "0"
 )

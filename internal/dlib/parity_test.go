@@ -37,7 +37,7 @@ func TestParity(t *testing.T) {
 	}
 
 	for _, cnn := range []bool{false, true} {
-		m, err := Load(paths.HOGDetector(), paths.CNNDetector(), paths.ShapePredictor(), paths.Recognizer(), cnn)
+		m, err := Load(paths.HOGDetector(), paths.CNNDetector(), paths.ShapePredictor(), paths.Recognizer(), cnn, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -57,7 +57,7 @@ func TestParity(t *testing.T) {
 					key = "cnn0"
 				}
 				want := runs[key]
-				rects, err := m.Detect(gs, up, cnn)
+				rects, err := m.DetectWith(gs, up, cnn)
 				if err != nil {
 					t.Fatal(err)
 				}

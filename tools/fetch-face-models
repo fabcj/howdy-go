@@ -1,0 +1,57 @@
+#!/bin/sh
+# Downloads the candidate face models tools/face-eval.py compares against
+# dlib, checked against pinned hashes. They stay outside the repo.
+#
+#   tools/fetch-face-models [-r] [dir]
+#
+# Only weights whose upstream license allows redistribution are fetched by
+# default. -r also fetches InsightFace's ArcFace weights, which are for
+# non-commercial research only: they're the accuracy ceiling to compare
+# against, never something to ship.
+#
+# Hashes: OpenCV Zoo's git-LFS pointers for YuNet and SFace, UniFace's
+# uniface/constants.py for the rest.
+set -eu
+
+research=0
+if [ "${1:-}" = -r ]; then
+	research=1
+	shift
+fi
+dir=${1:-${XDG_CACHE_HOME:-$HOME/.cache}/howdy-go/models}
+mkdir -p "$dir"
+
+zoo=https://media.githubusercontent.com/media/opencv/opencv_zoo/main/models
+uf=https://github.com/yakhyo/uniface/releases/download/weights
+ada=https://github.com/yakhyo/adaface-onnx/releases/download/weights
+edge=https://github.com/yakhyo/edgeface-onnx/releases/download/weights
+
+# sha256, url, local name, license
+while read -r sum url name license; do
+	if [ "$license" = non-commercial ] && [ $research = 0 ]; then
+		continue
+	fi
+	out=$dir/$name
+	if [ ! -f "$out" ] || ! echo "$sum  $out" | sha256sum -c --status; then
+		curl -sSfL --max-time 600 -A 'howdy-go-model-fetch' -o "$out.part" "$url"
+		if ! echo "$sum  $out.part" | sha256sum -c --status; then
+			rm -f "$out.part"
+			echo "fetch-face-models: $name doesn't match its hash" >&2
+			exit 1
+		fi
+		mv "$out.part" "$out"
+	fi
+	echo "$out ($license)"
+done <<LIST
+8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4 $zoo/face_detection_yunet/face_detection_yunet_2023mar.onnx yunet_2023mar.onnx MIT
+ebafce4e3c118d6554634be5c27ab333b4c047a9a8c3faf1d7cf93101c22f0f0 $zoo/face_detection_yunet/face_detection_yunet_2026may.onnx yunet_2026may.onnx MIT
+0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79 $zoo/face_recognition_sface/face_recognition_sface_2021dec.onnx sface_2021dec.onnx Apache-2.0
+dc674de4cbc77fa0bf9a82d5149558ab8581d82a2cd3bb60f28fd1a5d3ff8a2f $edge/edgeface_xxs.onnx edgeface_xxs.onnx BSD-3-Clause
+9206e2eb13a2761d7b5b76e13016d4b9acd3fa3535a9a09939f3adacd139a5ff $edge/edgeface_xs_gamma_06.onnx edgeface_xs_gamma_06.onnx BSD-3-Clause
+b850767cf791bda585600b5c4c7d7432b2f998ccd862caae34ef1afa967d2e54 $edge/edgeface_s_gamma_05.onnx edgeface_s_gamma_05.onnx BSD-3-Clause
+b56942f072c67385f44734b9458b0ccc4a2226888a113f77e0c802ad0c77b4c3 $edge/edgeface_base.onnx edgeface_base.onnx BSD-3-Clause
+6b6a35772fb636cdd4fa86520c1a259d0c41472a76f70f802b351837a00d9870 $ada/adaface_ir_18.onnx adaface_ir_18.onnx MIT,WebFace4M-data
+9c0ae385d7362323c92d218de598d32e52a9130b78faac6a8a924091aca62c0b $ada/adaface_ir_50.onnx adaface_ir_50.onnx MIT,WebFace4M-data
+9cc6e4a75f0e2bf0b1aed94578f144d15175f357bdc05e815e5c4a02b319eb4f $uf/w600k_mbf.onnx arcface_mbf.onnx non-commercial
+4c06341c33c2ca1f86781dab0e829f88ad5b64be9fba56e56bc9ebdefc619e43 $uf/w600k_r50.onnx arcface_r50.onnx non-commercial
+LIST

@@ -3,30 +3,29 @@ package cli
 import (
 	"errors"
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 	"time"
 
+	"howdy-go/internal/backend"
+	"howdy-go/internal/compare"
+	"howdy-go/internal/config"
 	"howdy-go/internal/face"
 	"howdy-go/internal/imgproc"
 	"howdy-go/internal/model"
-	"howdy-go/internal/paths"
 )
 
 // test is Howdy's cli/test.py as a terminal readout instead of a window,
 // which can't open under sudo on Wayland. One line per frame, then a
 // summary on ctrl+C to tune certainty with.
 func (c *cmd) test() int {
-	if _, err := os.Stat(paths.ShapePredictor()); err != nil {
-		c.say("Data files have not been downloaded, please run the following commands:")
-		c.say("\n\tcd " + paths.DlibDataDir)
-		c.say("\tsudo ./install.sh\n")
-		return 1
-	}
 	_, s, err := c.settings()
 	if err != nil {
 		return c.errorf("%v", err)
+	}
+	if msg := backend.MissingData(s.Recognizer); msg != "" {
+		c.say(msg)
+		return 1
 	}
 
 	// Like test.py, a missing model only means no matching
@@ -40,16 +39,29 @@ func (c *cmd) test() int {
 	case err != nil:
 		return c.errorf("%v", err)
 	default:
-		known, owner = m.Flat()
+		known, owner, err = backend.Known(s, c.user, m)
+		if errors.Is(err, backend.ErrNotEnrolled) {
+			c.printf("No sface model for %s yet (run howdy add), only showing detection\n", c.user)
+		} else if err != nil {
+			return c.errorf("%v", err)
+		}
 		for _, e := range m.Entries {
 			labels = append(labels, model.Label(e))
 		}
 	}
-	certainty := s.Certainty / 10
+	certainty := compare.Threshold(s)
+	sim := s.Recognizer == "sface"
+	// What's shown for a distance: certainty for dlib, similarity for sface
+	shown := func(d float64) float64 {
+		if sim {
+			return face.Cosine(d)
+		}
+		return d * 10
+	}
 
-	faces, err := c.Faces(s)
+	faces, err := c.Faces(s, s.Recognizer)
 	if err != nil {
-		return c.errorf("can't load the dlib models: %v", err)
+		return c.errorf("can't load the %s models: %v", s.Recognizer, err)
 	}
 	defer faces.Close()
 	cam, closeCam, code := c.openCamera(s)
@@ -62,7 +74,11 @@ func (c *cmd) test() int {
 	defer release()
 
 	c.printf("\nTesting the camera at %s for %s\n", s.DevicePath, c.user)
-	c.printf("Certainty %g, dark threshold %g, upsample %d\n", s.Certainty, s.DarkThreshold, s.DetectionUpsample)
+	if sim {
+		c.printf("Recognizer sface, match threshold %g, dark threshold %g\n", s.MatchThreshold, s.DarkThreshold)
+	} else {
+		c.printf("Certainty %g, dark threshold %g, upsample %d\n", s.Certainty, s.DarkThreshold, s.DetectionUpsample)
+	}
 	c.say("Press ctrl+C to stop\n")
 	c.say("frame      ms  dark%  faces  rec ms  result")
 
@@ -71,7 +87,7 @@ func (c *cmd) test() int {
 	for {
 		select {
 		case <-stop:
-			st.report(c, c.Now().Sub(start), s.Certainty)
+			st.report(c, c.Now().Sub(start), s)
 			return 0
 		default:
 		}
@@ -104,7 +120,7 @@ func (c *cmd) test() int {
 		}
 
 		t := c.Now()
-		rects, err := faces.Detect(gs, s.DetectionUpsample, s.UseCNN)
+		rects, err := faces.Detect(gs)
 		if err != nil {
 			return c.errorf("face detection failed: %v", err)
 		}
@@ -118,13 +134,13 @@ func (c *cmd) test() int {
 			if err != nil {
 				return c.errorf("face encoding failed: %v", err)
 			}
-			d, i := face.Best(known, &enc.Descriptor)
+			d, i := face.Best(known, enc.Descriptor)
 			st.dists = append(st.dists, d)
 			if 0 < d && d < certainty {
 				st.matches++
-				results = append(results, fmt.Sprintf("%.3f %s", d*10, labels[owner[i]]))
+				results = append(results, fmt.Sprintf("%.3f %s", shown(d), labels[owner[i]]))
 			} else {
-				results = append(results, fmt.Sprintf("%.3f no match", d*10))
+				results = append(results, fmt.Sprintf("%.3f no match", shown(d)))
 			}
 		}
 		rec := c.Now().Sub(t)
@@ -150,8 +166,7 @@ type testStats struct {
 	rec                             time.Duration
 }
 
-// certainty is as written in the config, not divided by 10
-func (st *testStats) report(c *cmd, took time.Duration, certainty float64) {
+func (st *testStats) report(c *cmd, took time.Duration, s *config.Settings) {
 	c.printf("\n%d frames in %.1f s", st.frames, took.Seconds())
 	if took > 0 {
 		c.printf(", %.1f fps", float64(st.frames)/took.Seconds())
@@ -169,12 +184,21 @@ func (st *testStats) report(c *cmd, took time.Duration, certainty float64) {
 	if len(d)%2 == 0 {
 		median = (d[len(d)/2-1] + d[len(d)/2]) / 2
 	}
-	c.printf("Certainty: best %.3f, median %.3f, %d of %d faces under %g\n",
-		d[0]*10, median*10, st.matches, len(d), certainty)
 	// A median close to the threshold means most frames miss, and each
 	// miss costs a frame of unlock time
-	if median*10 >= certainty*0.9 {
+	close, knob := false, "raising certainty"
+	if s.Recognizer == "sface" {
+		knob = "lowering match_threshold"
+		c.printf("Similarity: best %.3f, median %.3f, %d of %d faces over %g\n",
+			face.Cosine(d[0]), face.Cosine(median), st.matches, len(d), s.MatchThreshold)
+		close = face.Cosine(median) <= s.MatchThreshold+(1-s.MatchThreshold)*0.1
+	} else {
+		c.printf("Certainty: best %.3f, median %.3f, %d of %d faces under %g\n",
+			d[0]*10, median*10, st.matches, len(d), s.Certainty)
+		close = median*10 >= s.Certainty*0.9
+	}
+	if close {
 		c.say("Most faces are close to or over the threshold. Enrolling again in your usual position")
-		c.say("usually helps more than raising certainty")
+		c.say("usually helps more than " + knob)
 	}
 }

@@ -11,10 +11,11 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"howdy-go/internal/backend"
+	"howdy-go/internal/backend/loader"
 	"howdy-go/internal/camera"
 	"howdy-go/internal/compare"
 	"howdy-go/internal/config"
-	"howdy-go/internal/dlib"
 	"howdy-go/internal/harden"
 	"howdy-go/internal/imgproc"
 	"howdy-go/internal/model"
@@ -60,8 +61,9 @@ func run() int {
 	if err != nil {
 		return fail(compare.Abort, "can't read the face model: %v", err)
 	}
-	known, owner := models.Flat()
-	if len(known) == 0 {
+	// howdy add writes a dlib encoding with every model, whatever the
+	// recognizer, so none here means nothing is enrolled
+	if flat, _ := models.Flat(); len(flat) == 0 {
 		return compare.NoFaceModel
 	}
 	labels := make([]string, len(models.Entries))
@@ -86,6 +88,19 @@ func run() int {
 		return fail(compare.Abort, "rubberstamps are enabled but not supported yet")
 	}
 
+	// With sface, only its descriptors for models the .dat file still lists.
+	// None means the password, not falling back to dlib
+	known, owner, err := backend.Known(s, user, models)
+	if errors.Is(err, backend.ErrNotEnrolled) {
+		return fail(compare.NoFaceModel, "%v", err)
+	}
+	if err != nil {
+		return fail(compare.Abort, "can't read the face model: %v", err)
+	}
+	if len(known) == 0 {
+		return compare.NoFaceModel
+	}
+
 	if _, err := os.Stat(s.DevicePath); err != nil {
 		if s.WarnNoDevice {
 			fmt.Println("Howdy could not find a camera device at the path specified in the config file.")
@@ -95,10 +110,8 @@ func run() int {
 		return compare.BadDevice
 	}
 
-	if _, err := os.Stat(paths.ShapePredictor()); err != nil {
-		fmt.Println("Data files have not been downloaded, please run the following commands:")
-		fmt.Println("\n\tcd " + paths.DlibDataDir)
-		fmt.Print("\tsudo ./install.sh\n\n")
+	if msg := backend.MissingData(s.Recognizer); msg != "" {
+		fmt.Println(msg)
 		return compare.Abort
 	}
 
@@ -118,7 +131,7 @@ func run() int {
 	}()
 
 	t := time.Now()
-	faces, faceErr := dlib.Load(paths.HOGDetector(), paths.CNNDetector(), paths.ShapePredictor(), paths.Recognizer(), s.UseCNN)
+	faces, faceErr := loader.Load(s, s.Recognizer)
 	modelsTook := time.Since(t)
 	cr := <-camDone
 
@@ -130,14 +143,14 @@ func run() int {
 	}
 	defer cr.cam.Close()
 	if faceErr != nil {
-		return fail(compare.Abort, "can't load the dlib models: %v", faceErr)
+		return fail(compare.Abort, "can't load the %s models: %v", s.Recognizer, faceErr)
 	}
 	defer faces.Close()
 
 	snapshots := s.SaveFailed || s.SaveSuccessful
 	if unix.Geteuid() == 0 {
 		// Started by sudo and the like: nothing past this point needs root.
-		// Writing a snapshot would, so those are off here (spec 4.8)
+		// Writing a snapshot would, so those are off here
 		uid, gid, err := harden.Nobody()
 		if err != nil {
 			return fail(compare.Abort, "%v", err)

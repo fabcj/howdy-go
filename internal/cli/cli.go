@@ -16,6 +16,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"howdy-go/internal/backend"
 	"howdy-go/internal/compare"
 	"howdy-go/internal/config"
 	"howdy-go/internal/enroll"
@@ -48,7 +49,8 @@ type Env struct {
 	// Opens the camera from the settings, with a function to close it
 	Camera func(s *config.Settings) (compare.Camera, func(), error)
 	// Loads the face models
-	Faces func(s *config.Settings) (face.Recognizer, error)
+	// Faces loads a recogniser, "dlib" or "sface"
+	Faces func(s *config.Settings, name string) (face.Recognizer, error)
 	// Runs the editor with the config file, as argv
 	Edit     func(argv []string) error
 	LookPath func(string) (string, error)
@@ -269,8 +271,43 @@ func (c *cmd) clear() int {
 	if err := model.Remove(paths.UserModelsDir, c.user); err != nil {
 		return c.errorf("%v", err)
 	}
+	if err := c.removeSFace(); err != nil {
+		return c.errorf("%v", err)
+	}
 	c.say("\nModels cleared")
 	return 0
+}
+
+// removeSFace deletes the user's sface descriptors, if there are any. A
+// leftover file couldn't match anyway: compare only uses descriptors whose
+// model the .dat file still has.
+func (c *cmd) removeSFace() error {
+	err := model.Remove(paths.SFaceModelsDir, c.user)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return err
+}
+
+// pruneSFace removes the sface descriptors whose model the .dat file (dat)
+// no longer has, if there are any
+func (c *cmd) pruneSFace(dat *model.Models) error {
+	m, err := model.LoadSize(paths.SFaceModelsDir, c.user, paths.ModelOwnerUID(), backend.SFaceSize)
+	if errors.Is(err, model.ErrNoModel) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	m.Prune(dat)
+	if len(m.Entries) == 0 {
+		return c.removeSFace()
+	}
+	gid, err := c.UserGID(c.user)
+	if err != nil {
+		return err
+	}
+	return model.Save(paths.SFaceModelsDir, c.user, gid, m)
 }
 
 func (c *cmd) remove() int {
@@ -319,6 +356,9 @@ func (c *cmd) remove() int {
 		if err := model.Remove(paths.UserModelsDir, c.user); err != nil {
 			return c.errorf("%v", err)
 		}
+		if err := c.removeSFace(); err != nil {
+			return c.errorf("%v", err)
+		}
 		c.say("Removed last model, howdy disabled for user")
 		return 0
 	}
@@ -330,6 +370,9 @@ func (c *cmd) remove() int {
 	}
 	m.Entries = rest
 	if err := c.save(m); err != nil {
+		return c.errorf("%v", err)
+	}
+	if err := c.pruneSFace(m); err != nil {
 		return c.errorf("%v", err)
 	}
 	c.printf("Removed model %s\n", id)
@@ -591,11 +634,26 @@ func (c *cmd) add() int {
 	if err != nil {
 		return c.errorf("%v", err)
 	}
-	faces, err := c.Faces(s)
+	// dlib always: the .dat file it writes is what list, remove, the PAM
+	// module and Python Howdy go by, and recognizer = dlib has to keep working
+	faces, err := c.Faces(s, "dlib")
 	if err != nil {
 		return c.errorf("can't load the dlib models: %v", err)
 	}
 	defer faces.Close()
+	// And the configured recogniser too, from the same frames
+	var extra face.Recognizer
+	if s.Recognizer != "dlib" {
+		if msg := backend.MissingData(s.Recognizer); msg != "" {
+			c.say(msg)
+			return 1
+		}
+		extra, err = c.Faces(s, s.Recognizer)
+		if err != nil {
+			return c.errorf("can't load the %s models: %v", s.Recognizer, err)
+		}
+		defer extra.Close()
+	}
 
 	if !dirExists(paths.UserModelsDir) {
 		c.say("No face model folder found, creating one")
@@ -668,10 +726,13 @@ func (c *cmd) add() int {
 		}
 	}
 
-	var encs [][128]float64
+	var encs, extraEncs [][]float64
 	frames, valid, darkTries := 0, 0, 0
 	var darkTotal float32
-	for len(encs) < s.EnrollFrames && frames < 60+s.EnrollFrames*6 {
+	more := func() bool {
+		return len(encs) < s.EnrollFrames || extra != nil && len(extraEncs) < s.EnrollFrames
+	}
+	for more() && frames < 60+s.EnrollFrames*6 {
 		frames++
 		raw, code := c.readFrame(cam)
 		if code != 0 {
@@ -689,22 +750,35 @@ func (c *cmd) add() int {
 			continue
 		}
 
-		rects, err := faces.Detect(gs, s.DetectionUpsample, s.UseCNN)
+		rects, err := faces.Detect(gs)
 		if err != nil {
 			return c.errorf("face detection failed: %v", err)
 		}
-		if len(rects) > 1 {
+		var extraRects []face.Rect
+		if extra != nil {
+			if extraRects, err = extra.Detect(gs); err != nil {
+				return c.errorf("face detection failed: %v", err)
+			}
+		}
+		// Either detector seeing two faces stops it
+		if len(rects) > 1 || len(extraRects) > 1 {
 			closeCam()
 			return c.fail("Multiple faces detected, aborting")
 		}
-		if len(rects) == 0 {
-			continue
+		if len(rects) == 1 && len(encs) < s.EnrollFrames {
+			enc, err := faces.Encode(raw, rects[0])
+			if err != nil {
+				return c.errorf("face encoding failed: %v", err)
+			}
+			encs = append(encs, enc.Descriptor)
 		}
-		enc, err := faces.Encode(raw, rects[0])
-		if err != nil {
-			return c.errorf("face encoding failed: %v", err)
+		if len(extraRects) == 1 && len(extraEncs) < s.EnrollFrames {
+			enc, err := extra.Encode(raw, extraRects[0])
+			if err != nil {
+				return c.errorf("face encoding failed: %v", err)
+			}
+			extraEncs = append(extraEncs, enc.Descriptor)
 		}
-		encs = append(encs, enc.Descriptor)
 	}
 	closeCam()
 
@@ -723,6 +797,9 @@ func (c *cmd) add() int {
 	if len(encs) < min(3, s.EnrollFrames) {
 		return c.fail("Only saw a face in %d frames, please hold still and try again", len(encs))
 	}
+	if extra != nil && len(extraEncs) < min(3, s.EnrollFrames) {
+		return c.fail("%s only saw a face in %d frames, please hold still and try again", s.Recognizer, len(extraEncs))
+	}
 
 	r, err := enroll.Average(encs)
 	if err != nil {
@@ -736,8 +813,45 @@ func (c *cmd) add() int {
 	if err := model.Save(paths.UserModelsDir, c.user, gid, m); err != nil {
 		return c.errorf("%v", err)
 	}
+	if extra != nil {
+		if err := c.saveSFace(m, created, label, nextID, extraEncs, gid); err != nil {
+			return c.errorf("the model was saved for dlib only: %v", err)
+		}
+	}
 	c.say("\nScan complete\nAdded a new model to " + c.user)
 	return 0
+}
+
+// saveSFace averages the sface descriptors and stores them under the same
+// id, time and label as the dlib model, after the .dat file (dat) has it.
+// Entries for models no longer in the .dat file go first.
+func (c *cmd) saveSFace(dat *model.Models, created int64, label string, id int64, encs [][]float64, gid int) error {
+	r, err := enroll.Average(encs)
+	if err != nil {
+		return err
+	}
+	enc := face.Unit(r.Encoding)
+	if !c.a.plain {
+		c.printf("sface: used %d of %d frames, least similar %.2f\n", r.Used, r.Total, face.Cosine(r.Worst/10))
+	}
+	if !dirExists(paths.SFaceModelsDir) {
+		if err := os.MkdirAll(paths.SFaceModelsDir, 0o755); err != nil {
+			return err
+		}
+		if err := os.Chmod(paths.SFaceModelsDir, 0o755); err != nil {
+			return err
+		}
+	}
+	m, err := model.LoadSize(paths.SFaceModelsDir, c.user, paths.ModelOwnerUID(), backend.SFaceSize)
+	if errors.Is(err, model.ErrNoModel) {
+		m, err = model.NewModels(backend.SFaceSize), nil
+	}
+	if err != nil {
+		return err
+	}
+	m.Prune(dat)
+	m.Entries = append(m.Entries, model.NewTaggedEntry(created, label, id, enc, backend.SFaceEncoder))
+	return model.Save(paths.SFaceModelsDir, c.user, gid, m)
 }
 
 func truncateRunes(s string, n int) string {
