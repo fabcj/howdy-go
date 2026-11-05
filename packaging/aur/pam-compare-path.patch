@@ -1,0 +1,139 @@
+diff --git a/howdy/src/meson.build b/howdy/src/meson.build
+index 36dc05e..37e7d52 100644
+--- a/howdy/src/meson.build
++++ b/howdy/src/meson.build
+@@ -53,6 +53,11 @@ endif
+ pam_module_conf_data = configuration_data(paths_dict)
+ pam_module_conf_data.set('compare_script_path', join_paths(pysourcesinstalldir, 'compare.py'))
+ pam_module_conf_data.set('config_file_path', config_path)
++comparepath = get_option('compare_path')
++if comparepath != '' and not comparepath.startswith('/')
++    error('compare_path must be an absolute path')
++endif
++pam_module_conf_data.set('compare_path', comparepath)
+ subdir('pam')
+ if get_option('install_pam_config')
+     # pamdir is inherited from the pam subproject
+diff --git a/howdy/src/pam/main.cc b/howdy/src/pam/main.cc
+index d3af59d..75132f9 100644
+--- a/howdy/src/pam/main.cc
++++ b/howdy/src/pam/main.cc
+@@ -2,6 +2,7 @@
+ #include <csignal>
+ #include <cstdlib>
+ 
++#include <fcntl.h>
+ #include <glob.h>
+ #include <libintl.h>
+ #include <pthread.h>
+@@ -21,6 +22,7 @@
+ #include <fstream>
+ #include <functional>
+ #include <future>
++#include <initializer_list>
+ #include <mutex>
+ #include <string>
+ #include <tuple>
+@@ -77,7 +79,8 @@ auto howdy_error(int status,
+       break;
+     default:
+       conv_function(PAM_ERROR_MSG,
+-                    std::string(S("Unknown error: ") + status).c_str());
++                    (std::string(S("Unknown error: ")) + std::to_string(status))
++                        .c_str());
+       syslog(LOG_ERR, "Failure, unknown error %d", status);
+     }
+   } else if (WIFSIGNALED(status)) {
+@@ -262,15 +265,48 @@ auto identify(pam_handle_t *pamh, int flags, int argc, const char **argv,
+     }
+   }
+ 
+-  const char *const args[] = {PYTHON_EXECUTABLE_PATH, // NOLINT
+-                              COMPARE_PROCESS_PATH, username, nullptr};
++  const bool use_binary = COMPARE_BINARY_PATH[0] != '\0';
++  const char *const python_args[] = {PYTHON_EXECUTABLE_PATH, // NOLINT
++                                     COMPARE_PROCESS_PATH, username, nullptr};
++  const char *const binary_args[] = {COMPARE_BINARY_PATH, username, // NOLINT
++                                     nullptr};
++  // A fixed environment instead of an empty one. Multithreaded OpenBLAS can
++  // livelock here, and it reads these when it loads
++  const char *const env[] = {"OPENBLAS_NUM_THREADS=1", // NOLINT
++                             "OMP_NUM_THREADS=1", nullptr};
+   pid_t child_pid;
+ 
+-  // Start the python subprocess
+-  if (posix_spawnp(&child_pid, PYTHON_EXECUTABLE_PATH, nullptr, nullptr,
+-                   const_cast<char *const *>(args), nullptr) != 0) {
+-    syslog(LOG_ERR, "Can't spawn the howdy process: %s (%d)", strerror(errno),
+-           errno);
++  // When stdout or stderr is a socket, it is a protocol channel rather than a
++  // terminal or a log: polkit's socket-activated agent helper
++  // (polkit-agent-helper@.service, StandardOutput=socket) talks to the
++  // authentication agent over it. Anything the python process prints there
++  // corrupts that protocol, and the agent fails the whole session instead of
++  // falling back to the next PAM module. Send that output to /dev/null.
++  posix_spawn_file_actions_t file_actions;
++  posix_spawn_file_actions_init(&file_actions);
++  for (int output_fd : {STDOUT_FILENO, STDERR_FILENO}) {
++    struct stat output_stat {};
++    if (fstat(output_fd, &output_stat) == 0 && S_ISSOCK(output_stat.st_mode)) {
++      posix_spawn_file_actions_addopen(&file_actions, output_fd, "/dev/null",
++                                       O_WRONLY, 0);
++    }
++  }
++
++  // Start the compare process
++  int spawn_result =
++      use_binary
++          ? posix_spawn(&child_pid, COMPARE_BINARY_PATH, &file_actions,
++                        nullptr, const_cast<char *const *>(binary_args),
++                        const_cast<char *const *>(env))
++          : posix_spawnp(&child_pid, PYTHON_EXECUTABLE_PATH, &file_actions,
++                         nullptr, const_cast<char *const *>(python_args),
++                         const_cast<char *const *>(env));
++  posix_spawn_file_actions_destroy(&file_actions);
++
++  // posix_spawnp returns the error number instead of setting errno
++  if (spawn_result != 0) {
++    syslog(LOG_ERR, "Can't spawn the howdy process: %s (%d)",
++           strerror(spawn_result), spawn_result);
+     return PAM_SYSTEM_ERR;
+   }
+ 
+diff --git a/howdy/src/pam/optional_task.hh b/howdy/src/pam/optional_task.hh
+index 7845787..18edd53 100644
+--- a/howdy/src/pam/optional_task.hh
++++ b/howdy/src/pam/optional_task.hh
+@@ -71,7 +71,7 @@ template <typename T> void optional_task<T>::stop(bool force) {
+   is_active = false;
+ }
+ 
+-template <typename T> optional_task<T>::~optional_task<T>() {
++template <typename T> optional_task<T>::~optional_task() {
+   if (is_active && spawned) {
+     stop(false);
+   }
+diff --git a/howdy/src/pam/paths.hh.in b/howdy/src/pam/paths.hh.in
+index d8cd7eb..fa816df 100644
+--- a/howdy/src/pam/paths.hh.in
++++ b/howdy/src/pam/paths.hh.in
+@@ -1,4 +1,6 @@
+ const auto COMPARE_PROCESS_PATH = "@compare_script_path@";
+ const auto CONFIG_FILE_PATH = "@config_file_path@";
+ const auto USER_MODELS_DIR = "@user_models_dir@";
+-const auto PYTHON_EXECUTABLE_PATH = "@python_path@";
+\ No newline at end of file
++const auto PYTHON_EXECUTABLE_PATH = "@python_path@";
++// Run instead of python and compare.py when set
++const auto COMPARE_BINARY_PATH = "@compare_path@";
+\ No newline at end of file
+diff --git a/meson.options b/meson.options
+index 56c8f16..3521dce 100644
+--- a/meson.options
++++ b/meson.options
+@@ -8,4 +8,5 @@ option('install_in_site_packages', type: 'boolean', value: false, description: '
+ option('py_sources_dir', type: 'string', value: '', description: 'Set the python sources directory')
+ option('install_pam_config', type: 'boolean', value: false, description: 'Install pam config file (for Debian/Ubuntu)')
+ option('python_path', type: 'string', value: '/usr/bin/python', description: 'Set the path to the python executable')
++option('compare_path', type: 'string', value: '', description: 'Absolute path of a compare binary for the PAM module to run instead of python and compare.py')
+ option('with_polkit', type: 'boolean', value: false, description: 'Install polkit policy config file')

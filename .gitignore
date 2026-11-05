@@ -1,0 +1,21 @@
+# build output
+/bin/
+/howdy-compare
+/howdy
+
+# face data and camera frames never go in here
+*.dat
+*.jpg
+*.jpeg
+*.png
+*.pgm
+*.raw
+*.npy
+/testdata/live/
+
+# makepkg leftovers
+packaging/*/src/
+packaging/*/pkg/
+packaging/*/*/
+packaging/*/*.pkg.tar.*
+packaging/*/*.bz2

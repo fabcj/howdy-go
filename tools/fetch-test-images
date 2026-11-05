@@ -1,0 +1,32 @@
+#!/bin/sh
+# Downloads public domain portraits (NASA photos on Wikimedia Commons) for
+# the dlib parity test, checked against pinned hashes. They stay outside the
+# repo.
+#
+#   tools/fetch-test-images [dir]
+set -eu
+
+dir=${1:-${XDG_CACHE_HOME:-$HOME/.cache}/howdy-go/testdata}
+mkdir -p "$dir"
+base=https://upload.wikimedia.org/wikipedia/commons
+
+# sha256, path on Commons, local name
+while read -r sum path name; do
+	out=$dir/$name
+	if [ ! -f "$out" ] || ! echo "$sum  $out" | sha256sum -c --status; then
+		curl -sSf --max-time 120 -A 'howdy-go-test-fetch' -o "$out.part" "$base/$path"
+		if ! echo "$sum  $out.part" | sha256sum -c --status; then
+			rm -f "$out.part"
+			echo "fetch-test-images: $name doesn't match its hash" >&2
+			exit 1
+		fi
+		mv "$out.part" "$out"
+	fi
+	echo "$out"
+done <<'LIST'
+ba9ccc7c8accc044ebe71fbe402255d45f4cb0fec67f2c9afbfb4ed71d671784 3/3d/Apollo_11_Crew.jpg apollo11-crew.jpg
+fad48e8e3d1a7e38fa328c2059040fcde95b0cc4b9f6647f48a91274bf8e7928 e/e8/Ellen_Ochoa.jpg ochoa.jpg
+4a1462feb9874fb480037b9cf0111b0d325500e7e1753a3acda3a1e5ecc59457 e/e3/John_Glenn_Low_Res.jpg glenn.jpg
+2acf38e1ed3f9502daedb95cecdd4f69f1626f62241e4ce42a2ba3979b93dee0 0/0d/Neil_Armstrong_pose.jpg armstrong.jpg
+ea25b741c25978a84efbd5c0c333c61e59486768178799c7f32b05d07e851cef 0/0c/Sally_Ride_%281984%29.jpg ride.jpg
+LIST
