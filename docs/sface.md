@@ -27,7 +27,24 @@ round), two other people, and a phone photo of the user held up:
 dlib does tell the people apart; it fails because the user's own frames
 land over the threshold once the glasses change. sface leaves a wide gap
 on both sides of 0.363. One user and two other people is not a benchmark:
-run the harness on your own camera before relying on it (README, "Face models").
+run the harness on your own camera before relying on it.
+
+## Comparing on your own camera
+
+Record a few sessions of yourself (different days, glasses on and off), of
+other people with their consent, and optionally of a photo or screen of you
+held up to the camera. Frames stay in `~/.cache/howdy-go/faces`, mode 0700,
+and the report has scores, never encodings.
+
+    go build -o face-capture ./cmd/face-capture
+    ./face-capture -device /dev/videoN $USER        # once per session
+    ./face-capture -device /dev/videoN guest1
+    ./face-capture -device /dev/videoN attack-phone
+    tools/fetch-face-models                          # -r adds ArcFace, non-commercial
+    python3 -I tools/face-eval.py --upsample 0 --certainty 3.5 --dark-threshold 100
+
+Pass the `[video]` values you actually unlock with. Otherwise the harness
+uses whatever `config.ini` said when you recorded.
 
 ## Turning it on
 
