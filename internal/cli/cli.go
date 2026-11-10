@@ -16,16 +16,16 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"howdy-go/internal/backend"
-	"howdy-go/internal/compare"
-	"howdy-go/internal/config"
-	"howdy-go/internal/enroll"
-	"howdy-go/internal/face"
-	"howdy-go/internal/imgproc"
-	"howdy-go/internal/model"
-	"howdy-go/internal/paths"
-	"howdy-go/internal/pyfmt"
-	"howdy-go/internal/snapshot"
+	"github.com/fabcj/howdy-go/internal/backend"
+	"github.com/fabcj/howdy-go/internal/compare"
+	"github.com/fabcj/howdy-go/internal/config"
+	"github.com/fabcj/howdy-go/internal/enroll"
+	"github.com/fabcj/howdy-go/internal/face"
+	"github.com/fabcj/howdy-go/internal/imgproc"
+	"github.com/fabcj/howdy-go/internal/model"
+	"github.com/fabcj/howdy-go/internal/paths"
+	"github.com/fabcj/howdy-go/internal/pyfmt"
+	"github.com/fabcj/howdy-go/internal/snapshot"
 )
 
 // Version of howdy-go, set by the PKGBUILD
@@ -45,12 +45,15 @@ type Env struct {
 	CurrentUser func() string
 	// Primary group of a user, for the model file
 	UserGID func(name string) (int, error)
+	UserUID func(name string) (int, error)
 
 	// Opens the camera from the settings, with a function to close it
 	Camera func(s *config.Settings) (compare.Camera, func(), error)
 	// Loads the face models
 	// Faces loads a recogniser, "dlib" or "sface"
 	Faces func(s *config.Settings, name string) (face.Recognizer, error)
+	// Asks for a secret without showing it, for howdy pin
+	ReadHidden func(prompt string) (string, error)
 	// Runs the editor with the config file, as argv
 	Edit     func(argv []string) error
 	LookPath func(string) (string, error)
@@ -68,6 +71,8 @@ type cmd struct {
 	a    *args
 	in   *bufio.Reader
 	user string
+
+	warnedColour bool
 }
 
 // say is Python's print(), so "x\n" gives a blank line after x as it does there
@@ -152,6 +157,8 @@ func Main(e *Env) int {
 		return c.disable()
 	case "list":
 		return c.list()
+	case "pin":
+		return c.pin()
 	case "remove":
 		return c.remove()
 	case "set":
@@ -513,8 +520,8 @@ func writeConfig(path string, data []byte) error {
 	ok := false
 	defer func() {
 		if !ok {
-			f.Close()
-			unix.Unlink(tmp)
+			_ = f.Close()
+			_ = unix.Unlink(tmp)
 		}
 	}()
 	if unix.Geteuid() == 0 {
@@ -539,8 +546,8 @@ func writeConfig(path string, data []byte) error {
 	}
 	ok = true
 	if d, err := os.Open(filepath.Dir(path)); err == nil {
-		d.Sync()
-		d.Close()
+		_ = d.Sync()
+		_ = d.Close()
 	}
 	return nil
 }
@@ -572,7 +579,26 @@ func (c *cmd) readFrame(cam compare.Camera) (*imgproc.Gray, int) {
 		c.say("Failed to read camera specified in the 'device_path' config option, aborting")
 		return nil, compare.BadDevice
 	}
+	c.warnColour(cam)
 	return g, 0
+}
+
+// colourCamera is what a camera that can tell colour from IR frames adds
+type colourCamera interface{ Colour() bool }
+
+// warnColour says once that the camera looks like a regular webcam. The
+// thresholds were measured on an IR camera only, and a photo or a screen
+// is far closer to a real face on a colour one.
+func (c *cmd) warnColour(cam compare.Camera) {
+	cc, ok := cam.(colourCamera)
+	if c.warnedColour || !ok || !cc.Colour() {
+		return
+	}
+	c.warnedColour = true
+	fmt.Fprintln(c.Stderr, "howdy: this looks like a regular colour camera, not an IR one. howdy-go's thresholds were")
+	fmt.Fprintln(c.Stderr, "howdy: only measured on an IR camera, and a photo or screen of you can pass far more easily")
+	fmt.Fprintln(c.Stderr, "howdy: on a colour one. Set required_matches = 2, keep your password as the fallback, and")
+	fmt.Fprintln(c.Stderr, "howdy: see \"Regular cameras\" in the README.")
 }
 
 func (c *cmd) snapshot() int {
@@ -783,10 +809,10 @@ func (c *cmd) add() int {
 	closeCam()
 
 	if len(encs) == 0 {
-		switch {
-		case valid == 0:
+		switch valid {
+		case 0:
 			c.say("Camera saw only black frames - is IR emitter working?")
-		case valid == darkTries:
+		case darkTries:
 			c.say("All frames were too dark, please check dark_threshold in config")
 			c.printf("Average darkness: %s, Threshold: %s\n", pyfmt.Float32(darkTotal/float32(valid)), pyfmt.Float(s.DarkThreshold))
 		default:
@@ -863,6 +889,14 @@ func truncateRunes(s string, n int) string {
 }
 
 // UserGID looks a user's primary group up
+func UserUID(name string) (int, error) {
+	u, err := user.Lookup(name)
+	if err != nil {
+		return 0, err
+	}
+	return strconv.Atoi(u.Uid)
+}
+
 func UserGID(name string) (int, error) {
 	u, err := user.Lookup(name)
 	if err != nil {

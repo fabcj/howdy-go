@@ -1,0 +1,540 @@
+diff --git a/howdy/src/meson.build b/howdy/src/meson.build
+index fef4971..6a25396 100644
+--- a/howdy/src/meson.build
++++ b/howdy/src/meson.build
+@@ -60,6 +60,16 @@ if comparepath != '' and not comparepath.startswith('/')
+     error('compare_path must be an absolute path')
+ endif
+ pam_module_conf_data.set('compare_path', comparepath)
++pindir = get_option('pin_dir') != '' ? get_option('pin_dir') : join_paths(confdir, 'pin')
++if not pindir.startswith('/')
++    error('pin_dir must be an absolute path')
++endif
++pam_module_conf_data.set('pin_dir', pindir)
++pinuserdir = get_option('pin_user_dir') != '' ? get_option('pin_user_dir') : join_paths(confdir, 'pin-user')
++if not pinuserdir.startswith('/')
++    error('pin_user_dir must be an absolute path')
++endif
++pam_module_conf_data.set('pin_user_dir', pinuserdir)
+ subdir('pam')
+ if get_option('install_pam_config')
+     # pamdir is inherited from the pam subproject
+diff --git a/howdy/src/pam/main.cc b/howdy/src/pam/main.cc
+index 75132f9..91552d4 100644
+--- a/howdy/src/pam/main.cc
++++ b/howdy/src/pam/main.cc
+@@ -1,4 +1,5 @@
+ #include <cerrno>
++#include <crypt.h>
+ #include <csignal>
+ #include <cstdlib>
+ 
+@@ -8,6 +9,8 @@
+ #include <pthread.h>
+ #include <spawn.h>
+ #include <stdexcept>
++#include <pwd.h>
++#include <sys/file.h>
+ #include <sys/signalfd.h>
+ #include <sys/stat.h>
+ #include <sys/syslog.h>
+@@ -16,6 +19,7 @@
+ #include <syslog.h>
+ #include <unistd.h>
+ 
++#include <algorithm>
+ #include <chrono>
+ #include <condition_variable>
+ #include <cstring>
+@@ -44,6 +48,401 @@ const auto MAX_RETRIES = 5;
+ 
+ #define S(msg) gettext(msg)
+ 
++const auto PIN_TRIES = 3;
++
++/**
++ * Whether the pam_howdy.so line in the PAM config has the given argument
++ */
++auto has_argument(int argc, const char **argv, const char *name) -> bool {
++  for (int i = 0; i < argc; i++) {
++    if (strcmp(argv[i], name) == 0) {
++      return true;
++    }
++  }
++  return false;
++}
++
++/**
++ * A username that can be put in a path: what useradd allows, the same check
++ * howdy and howdy-compare make
++ */
++auto safe_username(const char *name) -> bool {
++  size_t len = strlen(name);
++  if (len == 0 || len > 32 ||
++      !(name[0] == '_' || (name[0] >= 'a' && name[0] <= 'z'))) {
++    return false;
++  }
++  for (size_t i = 1; i < len; i++) {
++    char c = name[i];
++    bool ok = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' ||
++              c == '-' || (c == '$' && i == len - 1);
++    if (!ok) {
++      return false;
++    }
++  }
++  return true;
++}
++
++/**
++ * Whether the file or directory belongs to owner and nobody else can access it
++ */
++auto private_to(const struct stat &st, mode_t type, uid_t owner) -> bool {
++  return (st.st_mode & S_IFMT) == type && (st.st_mode & 077) == 0 &&
++         st.st_uid == owner;
++}
++
++/**
++ * Where a PIN lives. The default store is only for root: howdy pin set
++ * makes it, root owns every file in it, and it is for PAM that runs as root
++ * (sudo, login managers). The user store, for PAM that runs as the user (lock
++ * screens), has files owned by that user in a directory owned by root, so
++ * that only root can create or remove them. That is weaker against malware
++ * running as the user, which can read and change them, but a lock screen
++ * guards against someone at the keyboard, not malware that is already in the
++ * session.
++ */
++struct PinStore {
++  const char *dir;
++  bool user_owned;
++};
++
++/**
++ * The uid that has to own the PIN files, or false if this store can't be used
++ * here. The user store is refused for root, where a file the user can change
++ * would let malware choose its own PIN, and when the process doesn't run as
++ * the user it authenticates.
++ */
++auto pin_owner(const PinStore &store, const char *username, uid_t &owner)
++    -> bool {
++  if (!store.user_owned) {
++    owner = 0;
++    return true;
++  }
++  if (geteuid() == 0) {
++    syslog(LOG_ERR, "PIN: the user store is not used as root");
++    return false;
++  }
++  struct passwd pw {};
++  struct passwd *found = nullptr;
++  char buf[1024];
++  if (getpwnam_r(username, &pw, buf, sizeof(buf), &found) != 0 ||
++      found == nullptr || pw.pw_uid != geteuid()) {
++    syslog(LOG_ERR, "PIN: the user store is only for the user it runs as");
++    return false;
++  }
++  owner = pw.pw_uid;
++  return true;
++}
++
++/**
++ * Whether the store's directory can be trusted: private to root for the root
++ * store, and for the user store owned by root and not writable by anyone else
++ */
++auto pin_dir_ok(const PinStore &store, const struct stat &st) -> bool {
++  if (!store.user_owned) {
++    return private_to(st, S_IFDIR, 0);
++  }
++  return (st.st_mode & S_IFMT) == S_IFDIR && st.st_uid == 0 &&
++         (st.st_mode & 022) == 0;
++}
++
++/**
++ * Read the user's PIN hash. Fails unless the PIN directory and the file in it
++ * are plain, not reachable by anyone else and not a symlink: a hash someone
++ * else could have written would make the PIN worthless.
++ * @return true and the hash if there is a usable one
++ */
++auto read_pin_hash(const PinStore &store, const char *username,
++                   std::string &hash) -> bool {
++  if (!safe_username(username)) {
++    syslog(LOG_ERR, "PIN: refusing the username");
++    return false;
++  }
++
++  uid_t owner = 0;
++  if (!pin_owner(store, username, owner)) {
++    return false;
++  }
++
++  struct stat dir_stat {};
++  if (lstat(store.dir, &dir_stat) != 0 || !pin_dir_ok(store, dir_stat)) {
++    syslog(LOG_ERR, "PIN: %s is missing or not trustworthy", store.dir);
++    return false;
++  }
++
++  std::string path = std::string(store.dir) + "/" + username;
++  int fd = open(path.c_str(), O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK);
++  if (fd < 0) {
++    syslog(LOG_ERR, "PIN: can't open %s: %s", path.c_str(), strerror(errno));
++    return false;
++  }
++
++  struct stat file_stat {};
++  char buf[1024];
++  ssize_t n = -1;
++  if (fstat(fd, &file_stat) == 0 && private_to(file_stat, S_IFREG, owner)) {
++    n = read(fd, buf, sizeof(buf) - 1);
++  } else {
++    syslog(LOG_ERR, "PIN: %s is not a private regular file", path.c_str());
++  }
++  close(fd);
++  if (n <= 0) {
++    return false;
++  }
++
++  buf[n] = '\0';
++  hash = buf;
++  while (!hash.empty() &&
++         (hash.back() == '\n' || hash.back() == '\r' || hash.back() == ' ')) {
++    hash.pop_back();
++  }
++  // Only yescrypt: anything else was not made by howdy pin set
++  if (hash.compare(0, 3, "$y$") != 0) {
++    syslog(LOG_ERR, "PIN: %s does not hold a yescrypt hash", path.c_str());
++    return false;
++  }
++  return true;
++}
++
++/**
++ * How many wrong PINs in a row, over any number of face scans, switch the PIN
++ * off until `howdy pin set` or `howdy pin clear` resets it. Without this, each
++ * face scan would give 3 more guesses at 10,000 values. A right PIN resets
++ * the count. Keep in step with internal/pin.MaxFails.
++ */
++const auto PIN_MAX_FAILS = 6;
++
++/**
++ * Open and lock the user's failure counter, next to the PIN hash. It is only
++ * ever used as root, and anything wrong with it fails closed.
++ * @return the locked file descriptor, or -1
++ */
++auto open_fail_counter(const PinStore &store, const char *username) -> int {
++  uid_t owner = 0;
++  if (!pin_owner(store, username, owner)) {
++    return -1;
++  }
++  std::string path = std::string(store.dir) + "/" + username + ".fail";
++  // The user store's counter is made by howdy pin set, as the user can't
++  // create files in a directory owned by root
++  int flags = O_RDWR | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK;
++  int fd = store.user_owned ? open(path.c_str(), flags)
++                            : open(path.c_str(), flags | O_CREAT, 0600);
++  if (fd < 0) {
++    syslog(LOG_ERR, "PIN: can't open %s: %s", path.c_str(), strerror(errno));
++    return -1;
++  }
++  struct stat st {};
++  if (fstat(fd, &st) != 0 || !private_to(st, S_IFREG, owner) ||
++      flock(fd, LOCK_EX) != 0) {
++    syslog(LOG_ERR, "PIN: %s is not usable", path.c_str());
++    close(fd);
++    return -1;
++  }
++  return fd;
++}
++
++/**
++ * Read the counter, or -1 if it holds something other than a small number
++ */
++auto read_fail_count(int fd) -> int {
++  char buf[32];
++  ssize_t n = pread(fd, buf, sizeof(buf) - 1, 0);
++  if (n < 0) {
++    return -1;
++  }
++  if (n == 0) {
++    return 0;
++  }
++  buf[n] = '\0';
++  char *end = nullptr;
++  errno = 0;
++  long count = strtol(buf, &end, 10);
++  if (errno != 0 || end == buf || count < 0 || count > 1000000) {
++    return -1;
++  }
++  return static_cast<int>(count);
++}
++
++/**
++ * Write the counter to disk before returning
++ */
++auto write_fail_count(int fd, int count) -> bool {
++  std::string text = std::to_string(count) + "\n";
++  return ftruncate(fd, 0) == 0 &&
++         pwrite(fd, text.data(), text.size(), 0) ==
++             static_cast<ssize_t>(text.size()) &&
++         fsync(fd) == 0;
++}
++
++/**
++ * Change the counter under its lock: `count` is passed through `change`
++ * and the result is stored. Returns the count read before the change, or -1
++ * if anything failed, in which case the PIN must not be accepted.
++ */
++auto update_fail_count(const PinStore &store, const char *username,
++                       const std::function<int(int)> &change) -> int {
++  int fd = open_fail_counter(store, username);
++  if (fd < 0) {
++    return -1;
++  }
++  int before = read_fail_count(fd);
++  if (before >= 0 && !write_fail_count(fd, change(before))) {
++    syslog(LOG_ERR, "PIN: can't write the failure counter");
++    before = -1;
++  }
++  close(fd);
++  return before;
++}
++
++/**
++ * Whether pin hashes to the stored hash, compared in constant time
++ */
++auto pin_matches(const std::string &pin, const std::string &hash) -> bool {
++  auto *data =
++      static_cast<struct crypt_data *>(calloc(1, sizeof(struct crypt_data)));
++  if (data == nullptr) {
++    return false;
++  }
++  char *made =
++      crypt_rn(pin.c_str(), hash.c_str(), data, sizeof(struct crypt_data));
++  bool same = false;
++  if (made != nullptr && made[0] != '*' && strlen(made) == hash.size()) {
++    unsigned char diff = 0;
++    for (size_t i = 0; i < hash.size(); i++) {
++      diff |= static_cast<unsigned char>(made[i] ^ hash[i]);
++    }
++    same = diff == 0;
++  }
++  explicit_bzero(data, sizeof(struct crypt_data));
++  free(data);
++  return same;
++}
++
++/**
++ * Ask for a secret without showing it
++ * @return false if the conversation failed
++ */
++auto ask_secret(const struct pam_conv *conv, const char *prompt,
++                std::string &secret) -> bool {
++  const struct pam_message msg = {.msg_style = PAM_PROMPT_ECHO_OFF,
++                                  .msg = prompt};
++  const struct pam_message *msgp = &msg;
++  struct pam_response *resp = nullptr;
++
++  if (conv->conv(1, &msgp, &resp, conv->appdata_ptr) != PAM_SUCCESS ||
++      resp == nullptr) {
++    return false;
++  }
++  if (resp->resp != nullptr) {
++    secret = resp->resp;
++    explicit_bzero(resp->resp, strlen(resp->resp));
++    free(resp->resp);
++  }
++  free(resp);
++  return true;
++}
++
++/**
++ * The second factor after a face match, when pam_howdy.so has the pin
++ * argument: the user's PIN, 3 tries. Fails closed: no PIN set, a PIN file
++ * this process can't read or trust, a failure counter that can't be kept, a
++ * PIN switched off by too many wrong tries, or 3 wrong tries all end in
++ * PAM_IGNORE, so the stack carries on to the password and the face alone
++ * never gets through.
++ *
++ * The failure counter goes up and is on disk before the PIN is looked at, and
++ * only a right PIN resets it, so cutting the process short after seeing the
++ * answer gains nothing. Answers that aren't 4 digits don't count towards it:
++ * they use up the 3 tries of this scan but can't be a guess, and a stray
++ * Enter must not lock the real user out.
++ *
++ * An answer that is the same as the one before ends the scan instead of
++ * being counted again. A greeter that can't ask a second question (sddm)
++ * answers every prompt with what is in its password box, so that is the PIN
++ * to type there, and a wrong one is one wrong try, not three.
++ * @return PAM_SUCCESS if the PIN was right, PAM_IGNORE otherwise
++ */
++auto check_pin(pam_handle_t *pamh, const struct pam_conv *conv,
++               const PinStore &store, const char *username,
++               const std::function<int(int, const char *)> &conv_function)
++    -> int {
++  // The password prompt that ran next to the face scan was answered with an
++  // empty line to dismiss it. Forget it, or the next module would count it as
++  // a failed password
++  pam_set_item(pamh, PAM_AUTHTOK, nullptr);
++
++  std::string hash;
++  if (!read_pin_hash(store, username, hash)) {
++    conv_function(PAM_ERROR_MSG,
++                  S("No usable PIN for this user, use your password"));
++    return PAM_IGNORE;
++  }
++
++  int fails = update_fail_count(store, username, [](int count) { return count; });
++  if (fails < 0) {
++    conv_function(PAM_ERROR_MSG,
++                  S("No usable PIN for this user, use your password"));
++    return PAM_IGNORE;
++  }
++  if (fails >= PIN_MAX_FAILS) {
++    syslog(LOG_WARNING, "PIN: switched off for %s after %d wrong PINs",
++           username, fails);
++    conv_function(PAM_ERROR_MSG,
++                  S("PIN switched off after too many wrong tries, use your "
++                    "password. Run howdy pin set to turn it on again"));
++    return PAM_IGNORE;
++  }
++
++  std::string last;
++  struct Wipe {
++    std::string &secret;
++    ~Wipe() { explicit_bzero(secret.data(), secret.size()); }
++  } wipe{last};
++
++  for (int attempt = 0; attempt < PIN_TRIES; attempt++) {
++    std::string pin;
++    if (!ask_secret(conv, S("PIN: "), pin)) {
++      syslog(LOG_ERR, "PIN: the conversation failed");
++      return PAM_IGNORE;
++    }
++    if (attempt > 0 && pin == last) {
++      explicit_bzero(pin.data(), pin.size());
++      return PAM_IGNORE;
++    }
++    last = pin;
++
++    bool four_digits = pin.size() == 4;
++    for (char c : pin) {
++      four_digits = four_digits && c >= '0' && c <= '9';
++    }
++
++    bool ok = false;
++    if (four_digits) {
++      // Counted and on disk first
++      int before = update_fail_count(store, username,
++                                     [](int count) { return count + 1; });
++      if (before < 0 || before >= PIN_MAX_FAILS) {
++        explicit_bzero(pin.data(), pin.size());
++        return PAM_IGNORE;
++      }
++      ok = pin_matches(pin, hash);
++      if (ok && update_fail_count(store, username, [](int) { return 0; }) < 0) {
++        syslog(LOG_ERR, "PIN: right PIN, but the counter can't be reset");
++      }
++    }
++    explicit_bzero(pin.data(), pin.size());
++    if (ok) {
++      return PAM_SUCCESS;
++    }
++    syslog(LOG_WARNING, "PIN: wrong PIN for %s (%d of %d)", username,
++           attempt + 1, PIN_TRIES);
++    conv_function(PAM_ERROR_MSG, S("Wrong PIN"));
++  }
++
++  return PAM_IGNORE;
++}
++
+ /**
+  * Inspect the status code returned by the compare process
+  * @param  status        The status code
+@@ -319,8 +702,20 @@ auto identify(pam_handle_t *pamh, int flags, int argc, const char **argv,
+   // This task wait for the status of the python subprocess (we don't want a
+   // zombie process)
+   optional_task<int> child_task([&] {
+-    int status;
+-    waitpid(child_pid, &status, 0);
++    // A failure unless waitpid says what the process did. If it fails (the
++    // PAM application ignores SIGCHLD or reaps children itself, or the call
++    // is interrupted for good), reading an uninitialised or stale status as
++    // "exited with 0" would let anyone in
++    int status = static_cast<int>(CompareError::ABORT) << 8;
++    pid_t waited;
++    do {
++      waited = waitpid(child_pid, &status, 0);
++    } while (waited < 0 && errno == EINTR);
++    if (waited != child_pid) {
++      syslog(LOG_ERR, "Can't get the compare process's exit status: %s",
++             strerror(errno));
++      status = static_cast<int>(CompareError::ABORT) << 8;
++    }
+     {
+       std::unique_lock<std::mutex> lock(mutx);
+       if (confirmation_type == ConfirmationType::Unset) {
+@@ -457,7 +852,18 @@ auto identify(pam_handle_t *pamh, int flags, int argc, const char **argv,
+     pass_task.stop(false);
+   }
+ 
+-  return howdy_status(username, status, config, conv_function);
++  int result = howdy_status(username, status, config, conv_function);
++  if (result == PAM_SUCCESS) {
++    if (has_argument(argc, argv, "pin")) {
++      return check_pin(pamh, conv, PinStore{PIN_DIR, false}, username,
++                       conv_function);
++    }
++    if (has_argument(argc, argv, "pin-user")) {
++      return check_pin(pamh, conv, PinStore{PIN_USER_DIR, true}, username,
++                       conv_function);
++    }
++  }
++  return result;
+ }
+ 
+ // Called by PAM when a user needs to be authenticated, for example by running
+diff --git a/howdy/src/pam/meson.build b/howdy/src/pam/meson.build
+index 35cdb03..1c78ff5 100644
+--- a/howdy/src/pam/meson.build
++++ b/howdy/src/pam/meson.build
+@@ -1,6 +1,8 @@
+ inih_cpp = dependency('INIReader', fallback: ['inih', 'INIReader_dep'])
+ libevdev = dependency('libevdev')
+ libpam = meson.get_compiler('cpp').find_library('pam')
++# libxcrypt, which makes and checks the PIN hashes (yescrypt)
++libcrypt = meson.get_compiler('cpp').find_library('crypt')
+ threads = dependency('threads')
+ 
+ # Translations
+@@ -21,6 +23,7 @@ shared_library(
+ 	'enter_device.cc',
+ 	dependencies: [
+ 		libpam,
++		libcrypt,
+ 		inih_cpp,
+ 		threads,
+ 		libevdev,
+diff --git a/howdy/src/pam/paths.hh.in b/howdy/src/pam/paths.hh.in
+index fa816df..7c3a061 100644
+--- a/howdy/src/pam/paths.hh.in
++++ b/howdy/src/pam/paths.hh.in
+@@ -3,4 +3,9 @@ const auto CONFIG_FILE_PATH = "@config_file_path@";
+ const auto USER_MODELS_DIR = "@user_models_dir@";
+ const auto PYTHON_EXECUTABLE_PATH = "@python_path@";
+ // Run instead of python and compare.py when set
+-const auto COMPARE_BINARY_PATH = "@compare_path@";
+\ No newline at end of file
++const auto COMPARE_BINARY_PATH = "@compare_path@";
++// Where the PIN hashes are, for the pin argument
++const auto PIN_DIR = "@pin_dir@";
++
++// Where the PINs for the pin-user argument are, owned by their users
++const auto PIN_USER_DIR = "@pin_user_dir@";
+diff --git a/meson.options b/meson.options
+index 3521dce..e12ba4f 100644
+--- a/meson.options
++++ b/meson.options
+@@ -10,3 +10,5 @@ option('install_pam_config', type: 'boolean', value: false, description: 'Instal
+ option('python_path', type: 'string', value: '/usr/bin/python', description: 'Set the path to the python executable')
+ option('compare_path', type: 'string', value: '', description: 'Absolute path of a compare binary for the PAM module to run instead of python and compare.py')
+ option('with_polkit', type: 'boolean', value: false, description: 'Install polkit policy config file')
++option('pin_dir', type: 'string', value: '', description: 'Set the directory of the PIN hashes pam_howdy.so checks when it has the pin argument, by default pin in the config directory')
++option('pin_user_dir', type: 'string', value: '', description: 'Set the directory of the PINs for PAM contexts that run as the user, such as lock screens (the pin-user argument), by default pin-user in the config directory')

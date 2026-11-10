@@ -9,11 +9,11 @@ import (
 	"syscall"
 	"time"
 
-	"howdy-go/internal/backend/loader"
-	"howdy-go/internal/camera"
-	"howdy-go/internal/cli"
-	"howdy-go/internal/compare"
-	"howdy-go/internal/config"
+	"github.com/fabcj/howdy-go/internal/backend/loader"
+	"github.com/fabcj/howdy-go/internal/camera"
+	"github.com/fabcj/howdy-go/internal/cli"
+	"github.com/fabcj/howdy-go/internal/compare"
+	"github.com/fabcj/howdy-go/internal/config"
 )
 
 func main() {
@@ -38,7 +38,9 @@ func main() {
 			}
 			return u.Username
 		},
-		UserGID: cli.UserGID,
+		UserGID:    cli.UserGID,
+		UserUID:    cli.UserUID,
+		ReadHidden: cli.TerminalSecret(os.Stdin, os.Stdout),
 		Camera: func(s *config.Settings) (compare.Camera, func(), error) {
 			c, err := camera.Open(s)
 			if err != nil {

@@ -7,7 +7,7 @@ import (
 	"math"
 	"sort"
 
-	"howdy-go/internal/face"
+	"github.com/fabcj/howdy-go/internal/face"
 )
 
 // Result is the averaged encoding and how well the frames agreed

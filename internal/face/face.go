@@ -5,7 +5,7 @@ package face
 import (
 	"math"
 
-	"howdy-go/internal/imgproc"
+	"github.com/fabcj/howdy-go/internal/imgproc"
 )
 
 // Rect is a face box, edges included as in dlib. Detectors that find the

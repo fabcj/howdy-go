@@ -20,7 +20,7 @@ import (
 	"golang.org/x/image/math/fixed"
 	"golang.org/x/sys/unix"
 
-	"howdy-go/internal/imgproc"
+	"github.com/fabcj/howdy-go/internal/imgproc"
 )
 
 var (

@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"howdy-go/internal/config"
-	"howdy-go/internal/face"
-	"howdy-go/internal/imgproc"
+	"github.com/fabcj/howdy-go/internal/config"
+	"github.com/fabcj/howdy-go/internal/face"
+	"github.com/fabcj/howdy-go/internal/imgproc"
 )
 
 type clock struct{ t time.Time }

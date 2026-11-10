@@ -14,7 +14,7 @@ import (
 	"unicode/utf16"
 	"unicode/utf8"
 
-	"howdy-go/internal/pyfmt"
+	"github.com/fabcj/howdy-go/internal/pyfmt"
 )
 
 // Value is one of nil, bool, Int, float64, string, []Value or *Object

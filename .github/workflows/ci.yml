@@ -1,0 +1,66 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: '0 6 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  # Everything that doesn't need dlib or ONNX Runtime
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      # internal/pin hashes with libcrypt (libxcrypt)
+      - run: sudo apt-get update && sudo apt-get install -y libcrypt-dev
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - run: go vet -tags "nodlib noonnx" ./...
+      - run: go test -tags "nodlib noonnx" ./...
+      - name: staticcheck
+        run: go run honnef.co/go/tools/cmd/staticcheck@2026.2.2 -tags "nodlib,noonnx" ./...
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest -tags "nodlib,noonnx" ./...
+
+  # The real build, with dlib and ONNX Runtime from Arch's repositories
+  arch:
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    steps:
+      - run: pacman -Syu --noconfirm git go pkgconf dlib onnxruntime-cpu blas-openblas golangci-lint make
+      - uses: actions/checkout@v4
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - run: golangci-lint run ./...
+      # vet, gofmt, tests, and PIE/RELRO/BIND_NOW on the binaries
+      - run: make check
+
+  # What users get: the AUR PKGBUILD in a throwaway user's makepkg. It builds
+  # howdy-go from the default branch, so it checks what was published, not
+  # the pull request.
+  package:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    steps:
+      - run: pacman -Syu --noconfirm git namcap sudo
+      - uses: actions/checkout@v4
+      - run: useradd -m builder && chown -R builder . && echo 'builder ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/builder
+      - run: sudo -u builder bash -c 'cd packaging/aur/howdy-go-git && makepkg -sf --noconfirm'
+      # The release package can't build until a tag exists; check what we can
+      - run: bash -n packaging/aur/howdy-go/PKGBUILD
+      # Each AUR package is its own repository, so the shared files are copies
+      - name: shared AUR files are identical
+        run: |
+          for f in howdy.install pam-compare-path.patch pam-pin.patch polkit-agent-helper-howdy.conf; do
+            cmp packaging/aur/howdy-go/$f packaging/aur/howdy-go-git/$f
+          done
+      # Informational: namcap is noisy, read the output
+      - run: namcap packaging/aur/howdy-go-git/PKGBUILD packaging/aur/howdy-go-git/*.pkg.tar.zst || true

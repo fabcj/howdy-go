@@ -1,5 +1,5 @@
 // Package paths holds the install locations. The PKGBUILD sets them with
-// -ldflags "-X howdy-go/internal/paths.ConfigDir=..." and so on.
+// -ldflags "-X github.com/fabcj/howdy-go/internal/paths.ConfigDir=..." and so on.
 package paths
 
 import (
@@ -19,6 +19,13 @@ var (
 	// takes every file for a user
 	ONNXDir        = "/usr/share/howdy-go/onnx"
 	SFaceModelsDir = "/etc/howdy/models-sface"
+
+	// The PIN hashes asked for after a face match, one root-only file per
+	// user, in a directory only root can enter
+	PinDir = "/etc/howdy/pin"
+	// The PINs for PAM that runs as the user, such as lock screens: files
+	// owned by the user in a directory owned by root
+	PinUserDir = "/etc/howdy/pin-user"
 
 	// Who must own the model files. Only test builds change it
 	ModelOwner = "0"

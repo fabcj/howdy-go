@@ -8,10 +8,10 @@ import (
 	"math"
 	"time"
 
-	"howdy-go/internal/config"
-	"howdy-go/internal/face"
-	"howdy-go/internal/imgproc"
-	"howdy-go/internal/pyfmt"
+	"github.com/fabcj/howdy-go/internal/config"
+	"github.com/fabcj/howdy-go/internal/face"
+	"github.com/fabcj/howdy-go/internal/imgproc"
+	"github.com/fabcj/howdy-go/internal/pyfmt"
 )
 
 // Exit codes the PAM module understands (pam/main.hh)

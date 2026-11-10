@@ -2,7 +2,9 @@ package model
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"math"
 	"math/rand/v2"
 	"os"
 	"os/exec"
@@ -25,7 +27,7 @@ func fakeEncoding(r *rand.Rand) []float64 {
 		}
 	}
 	enc[0] = 1e-05
-	enc[1] = -0.0
+	enc[1] = math.Copysign(0, -1)
 	enc[2] = 0.25
 	return enc
 }
@@ -141,7 +143,7 @@ func TestStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	me := os.Getuid()
-	if _, err := Load(dir, "alice", me); err != ErrNoModel {
+	if _, err := Load(dir, "alice", me); !errors.Is(err, ErrNoModel) {
 		t.Fatalf("missing model: %v", err)
 	}
 

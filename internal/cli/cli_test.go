@@ -12,13 +12,14 @@ import (
 	"testing"
 	"time"
 
-	"howdy-go/internal/backend"
-	"howdy-go/internal/compare"
-	"howdy-go/internal/config"
-	"howdy-go/internal/face"
-	"howdy-go/internal/imgproc"
-	"howdy-go/internal/model"
-	"howdy-go/internal/paths"
+	"github.com/fabcj/howdy-go/internal/backend"
+	"github.com/fabcj/howdy-go/internal/compare"
+	"github.com/fabcj/howdy-go/internal/config"
+	"github.com/fabcj/howdy-go/internal/face"
+	"github.com/fabcj/howdy-go/internal/imgproc"
+	"github.com/fabcj/howdy-go/internal/model"
+	"github.com/fabcj/howdy-go/internal/paths"
+	"github.com/fabcj/howdy-go/internal/pin"
 )
 
 func TestParse(t *testing.T) {
@@ -38,7 +39,7 @@ func TestParse(t *testing.T) {
 		{argv: []string{"--user=bob", "list"}, cmd: "list", user: "bob"},
 		{argv: []string{"add", "--", "-dash"}, cmd: "add", args: []string{"-dash"}, user: "me"},
 		{argv: []string{"add", "a", "-y", "b"}, err: "unrecognized arguments: b"},
-		{argv: []string{"bogus"}, err: "argument command: invalid choice: 'bogus' (choose from 'add', 'clear', 'config', 'disable', 'list', 'remove', 'set', 'snapshot', 'test', 'version')"},
+		{argv: []string{"bogus"}, err: "argument command: invalid choice: 'bogus' (choose from 'add', 'clear', 'config', 'disable', 'list', 'pin', 'remove', 'set', 'snapshot', 'test', 'version')"},
 		{argv: []string{"-U"}, err: "argument -U/--user: expected one argument"},
 		{argv: []string{"--nope", "list"}, err: "unrecognized arguments: --nope"},
 	} {
@@ -72,16 +73,18 @@ type testEnv struct {
 	// a fake ctrl+C once the camera has given this many frames
 	stopAfter int
 	stop      chan os.Signal
+	colour    bool     // what the fake camera's Colour says
+	secrets   []string // what the next ReadHidden calls return
 }
 
 func setup(t *testing.T) *testEnv {
 	t.Helper()
 	dir := t.TempDir()
 	old := []string{paths.ConfigDir, paths.UserModelsDir, paths.DlibDataDir, paths.LogPath, paths.DataDir, paths.ModelOwner,
-		paths.ONNXDir, paths.SFaceModelsDir}
+		paths.ONNXDir, paths.SFaceModelsDir, paths.PinDir, paths.PinUserDir}
 	t.Cleanup(func() {
 		paths.ConfigDir, paths.UserModelsDir, paths.DlibDataDir, paths.LogPath, paths.DataDir, paths.ModelOwner,
-			paths.ONNXDir, paths.SFaceModelsDir = old[0], old[1], old[2], old[3], old[4], old[5], old[6], old[7]
+			paths.ONNXDir, paths.SFaceModelsDir, paths.PinDir, paths.PinUserDir = old[0], old[1], old[2], old[3], old[4], old[5], old[6], old[7], old[8], old[9]
 	})
 	paths.ConfigDir = dir
 	paths.UserModelsDir = filepath.Join(dir, "models")
@@ -91,6 +94,8 @@ func setup(t *testing.T) *testEnv {
 	paths.ModelOwner = strconv.Itoa(os.Getuid())
 	paths.ONNXDir = filepath.Join(dir, "onnx")
 	paths.SFaceModelsDir = filepath.Join(dir, "models-sface")
+	paths.PinDir = filepath.Join(dir, "pin")
+	paths.PinUserDir = filepath.Join(dir, "pin-user")
 	os.Chmod(dir, 0o755)
 	os.Mkdir(paths.DlibDataDir, 0o755)
 	os.WriteFile(paths.ShapePredictor(), nil, 0o644)
@@ -108,6 +113,15 @@ func setup(t *testing.T) *testEnv {
 		UserName:    func(string) string { return "" },
 		CurrentUser: func() string { return "root" },
 		UserGID:     func(string) (int, error) { return os.Getgid(), nil },
+		UserUID:     func(string) (int, error) { return os.Getuid(), nil },
+		ReadHidden: func(prompt string) (string, error) {
+			if len(te.secrets) == 0 {
+				return "", errors.New("no more secrets")
+			}
+			s := te.secrets[0]
+			te.secrets = te.secrets[1:]
+			return s, nil
+		},
 		Camera: func(s *config.Settings) (compare.Camera, func(), error) {
 			return &fakeCam{te: te}, func() {}, nil
 		},
@@ -148,6 +162,8 @@ func (c *fakeCam) Read(time.Duration) (*imgproc.Gray, error) {
 }
 
 func (c *fakeCam) SetExposure(int) error { return nil }
+
+func (c *fakeCam) Colour() bool { return c.te.colour }
 
 type fakeFaces struct {
 	te *testEnv
@@ -432,6 +448,181 @@ func TestTest(t *testing.T) {
 		if f := strings.Fields(l); len(f) == 7 && f[3] == "1" && f[6] != "desk" && f[6] != "match" {
 			t.Errorf("face line %q", l)
 		}
+	}
+}
+
+func TestPin(t *testing.T) {
+	te := setup(t)
+	pinFile := filepath.Join(te.dir, "pin", "alice")
+
+	if code := te.run("pin"); code != 1 || !strings.Contains(te.out.String(), "howdy pin set") {
+		t.Errorf("pin without an action: exit %d\n%s", code, te.out.String())
+	}
+	te.run("pin", "status")
+	if !strings.Contains(te.out.String(), "PIN: alice has none") {
+		t.Errorf("status: %s", te.out.String())
+	}
+
+	// Refused: wrong length, not digits, easy to guess, two different entries.
+	// None of them may leave a file behind.
+	for _, secrets := range [][]string{
+		{"123"}, {"12345"}, {"abcd"}, {"1111"}, {"1234"}, {"4321"}, {"2121"}, {"4821", "4822"},
+	} {
+		te.secrets = secrets
+		if code := te.run("pin", "set"); code != 1 {
+			t.Errorf("%v accepted, exit %d", secrets, code)
+		}
+		if _, err := os.Stat(pinFile); err == nil {
+			t.Fatalf("%v left a PIN file", secrets)
+		}
+	}
+
+	te.secrets = []string{"4821", "4821"}
+	if code := te.run("pin", "set"); code != 0 {
+		t.Fatalf("set: exit %d\n%s%s", code, te.out.String(), te.errOut.String())
+	}
+	if strings.Contains(te.out.String()+te.errOut.String(), "4821") {
+		t.Error("the PIN was printed")
+	}
+	if !strings.Contains(te.out.String(), "pam_howdy.so pin") {
+		t.Errorf("no hint about the PAM argument:\n%s", te.out.String())
+	}
+	if st, err := os.Stat(pinFile); err != nil || st.Mode().Perm() != 0o600 {
+		t.Fatalf("pin file: %v %v", st, err)
+	}
+	hash, err := pin.Load(paths.PinDir, "alice", os.Geteuid())
+	if err != nil || !pin.Verify("4821", hash) || pin.Verify("4822", hash) {
+		t.Errorf("stored hash doesn't check: %v", err)
+	}
+
+	te.run("pin", "status")
+	if !strings.Contains(te.out.String(), "PIN: alice has one") {
+		t.Errorf("status: %s", te.out.String())
+	}
+
+	// The wrong tries the PAM module counts, and what resets them
+	counter := pinFile + ".fail"
+	os.WriteFile(counter, []byte("2\n"), 0o600)
+	te.run("pin", "status")
+	if !strings.Contains(te.out.String(), "2 of 6 wrong tries") {
+		t.Errorf("status with 2 wrong tries: %s", te.out.String())
+	}
+	os.WriteFile(counter, []byte("6\n"), 0o600)
+	te.run("pin", "status")
+	if !strings.Contains(te.out.String(), "switched off") {
+		t.Errorf("status when locked: %s", te.out.String())
+	}
+	te.secrets = []string{"4821", "4821"}
+	if code := te.run("pin", "set"); code != 0 {
+		t.Fatalf("setting it again: exit %d", code)
+	}
+	if _, err := os.Stat(counter); err == nil {
+		t.Error("setting a PIN again left the switched off count behind")
+	}
+	os.WriteFile(counter, []byte("3\n"), 0o600)
+	if code := te.run("pin", "clear"); code != 0 {
+		t.Errorf("clear: exit %d", code)
+	}
+	if _, err := os.Stat(counter); err == nil {
+		t.Error("clearing left the count behind")
+	}
+	te.secrets = []string{"4821", "4821"}
+	te.run("pin", "set")
+	if code := te.run("pin", "clear"); code != 0 {
+		t.Errorf("clear: exit %d", code)
+	}
+	if _, err := os.Stat(pinFile); err == nil {
+		t.Error("PIN still there after clear")
+	}
+	if code := te.run("pin", "clear"); code != 1 {
+		t.Errorf("clearing twice: exit %d", code)
+	}
+}
+
+func TestPinLockScreen(t *testing.T) {
+	te := setup(t)
+	userFile := filepath.Join(te.dir, "pin-user", "alice")
+	rootFile := filepath.Join(te.dir, "pin", "alice")
+
+	te.secrets = []string{"4821", "4821"}
+	if code := te.run("pin", "set", "lock-screen"); code != 0 {
+		t.Fatalf("set lock-screen: exit %d\n%s%s", code, te.out.String(), te.errOut.String())
+	}
+	if !strings.Contains(te.out.String(), "pam_howdy.so pin-user") {
+		t.Errorf("no hint about the pin-user argument:\n%s", te.out.String())
+	}
+	for _, f := range []string{userFile, userFile + ".fail"} {
+		if st, err := os.Stat(f); err != nil || st.Mode().Perm() != 0o600 {
+			t.Errorf("%s: %v %v", f, st, err)
+		}
+	}
+	if st, _ := os.Stat(filepath.Dir(userFile)); st.Mode().Perm() != 0o755 {
+		t.Errorf("user PIN dir mode %v", st.Mode().Perm())
+	}
+	if _, err := os.Stat(rootFile); err == nil {
+		t.Error("the lock screen PIN also made a root PIN")
+	}
+	if c, _ := os.ReadFile(userFile + ".fail"); string(c) != "0\n" {
+		t.Errorf("counter %q, the module can't create it so it must exist", c)
+	}
+	hash, err := pin.Load(paths.PinUserDir, "alice", os.Geteuid())
+	if err != nil || !pin.Verify("4821", hash) {
+		t.Errorf("stored hash: %v", err)
+	}
+
+	// Locked, then set again: the counter is rewritten, not removed
+	os.WriteFile(userFile+".fail", []byte("6\n"), 0o600)
+	te.run("pin", "status")
+	if !strings.Contains(te.out.String(), "lock screen PIN: alice has one") || !strings.Contains(te.out.String(), "switched off") {
+		t.Errorf("status:\n%s", te.out.String())
+	}
+	te.secrets = []string{"9264", "9264"}
+	if code := te.run("pin", "set", "lock-screen"); code != 0 {
+		t.Fatalf("set again: exit %d", code)
+	}
+	if c, _ := os.ReadFile(userFile + ".fail"); string(c) != "0\n" {
+		t.Errorf("counter after setting again: %q", c)
+	}
+
+	// The root PIN is separate, and clearing one leaves the other
+	te.secrets = []string{"4821", "4821"}
+	if code := te.run("pin", "set"); code != 0 {
+		t.Fatal("set")
+	}
+	if code := te.run("pin", "clear", "lock-screen"); code != 0 {
+		t.Errorf("clear lock-screen: exit %d", code)
+	}
+	for _, f := range []string{userFile, userFile + ".fail"} {
+		if _, err := os.Stat(f); err == nil {
+			t.Errorf("%s left after clearing", f)
+		}
+	}
+	if _, err := os.Stat(rootFile); err != nil {
+		t.Error("clearing the lock screen PIN removed the root one")
+	}
+	for _, args := range [][]string{{"pin", "set", "bogus"}, {"pin", "clear", "x", "y"}, {"pin", "status", "lock-screen"}} {
+		if code := te.run(args...); code != 1 {
+			t.Errorf("%v: exit %d, want the usage text", args, code)
+		}
+	}
+}
+
+func TestColourCameraWarning(t *testing.T) {
+	te := setup(t)
+	te.frames = []*imgproc.Gray{litFrame()}
+	te.stopAfter = 5
+	if code := te.run("test"); code != 0 || strings.Contains(te.errOut.String(), "colour camera") {
+		t.Fatalf("IR camera: exit %d, stderr %q", code, te.errOut.String())
+	}
+
+	te.colour = true
+	te.stopAfter = 5
+	te.run("test")
+	if n := strings.Count(te.errOut.String(), "regular colour camera"); n != 1 {
+		t.Errorf("warned %d times over several frames, want once:\n%s", n, te.errOut.String())
+	}
+	if !strings.Contains(te.errOut.String(), "required_matches = 2") {
+		t.Errorf("warning says nothing to do:\n%s", te.errOut.String())
 	}
 }
 

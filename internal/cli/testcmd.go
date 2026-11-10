@@ -7,12 +7,12 @@ import (
 	"strings"
 	"time"
 
-	"howdy-go/internal/backend"
-	"howdy-go/internal/compare"
-	"howdy-go/internal/config"
-	"howdy-go/internal/face"
-	"howdy-go/internal/imgproc"
-	"howdy-go/internal/model"
+	"github.com/fabcj/howdy-go/internal/backend"
+	"github.com/fabcj/howdy-go/internal/compare"
+	"github.com/fabcj/howdy-go/internal/config"
+	"github.com/fabcj/howdy-go/internal/face"
+	"github.com/fabcj/howdy-go/internal/imgproc"
+	"github.com/fabcj/howdy-go/internal/model"
 )
 
 // test is Howdy's cli/test.py as a terminal readout instead of a window,

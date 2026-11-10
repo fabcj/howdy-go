@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"os"
 
-	"howdy-go/internal/dlib"
+	"github.com/fabcj/howdy-go/internal/dlib"
 )
 
 func main() {

@@ -11,9 +11,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"howdy-go/internal/config"
-	"howdy-go/internal/model"
-	"howdy-go/internal/paths"
+	"github.com/fabcj/howdy-go/internal/config"
+	"github.com/fabcj/howdy-go/internal/model"
+	"github.com/fabcj/howdy-go/internal/paths"
 )
 
 // The sface model files and what they must hash to (OpenCV Zoo's git-LFS ids)

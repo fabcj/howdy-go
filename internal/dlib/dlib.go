@@ -22,8 +22,8 @@ import (
 	"runtime"
 	"unsafe"
 
-	"howdy-go/internal/face"
-	"howdy-go/internal/imgproc"
+	"github.com/fabcj/howdy-go/internal/face"
+	"github.com/fabcj/howdy-go/internal/imgproc"
 )
 
 // Available is true when this build has dlib

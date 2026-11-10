@@ -3,6 +3,7 @@ post_install() {
 	echo '[SETUP] 2. Add face model with `sudo howdy add`'
 	echo '[SETUP] 3. Add PAM policy `auth sufficient pam_howdy.so` to e.g. top of `/etc/pam.d/system-auth` (global auth)'
 	echo '[SETUP]    Keep a root shell open while you try it'
+	echo '[INFO] Optional: `sudo howdy pin set`, then `auth sufficient pam_howdy.so pin` (or `pin-user` with `sudo howdy pin set lock-screen` for lock screens), asks for a 4 digit PIN after the face scan'
 	echo '[INFO] `howdy test` shows what the camera sees in the terminal, not in a window'
 	echo '[INFO] List of available video devices can be obtained with `v4l2-ctl --list-devices` from `v4l-utils` package'
 	echo '[INFO] Arch Wiki page: https://wiki.archlinux.org/title/Howdy'

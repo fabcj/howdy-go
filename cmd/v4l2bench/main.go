@@ -10,7 +10,7 @@ import (
 	"os"
 	"time"
 
-	"howdy-go/internal/v4l2"
+	"github.com/fabcj/howdy-go/internal/v4l2"
 )
 
 func main() {

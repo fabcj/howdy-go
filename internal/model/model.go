@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"math"
 
-	"howdy-go/internal/pyfmt"
+	"github.com/fabcj/howdy-go/internal/pyfmt"
 )
 
 // EncodingSize is the length of a dlib face descriptor

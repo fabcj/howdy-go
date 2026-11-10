@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-var commands = []string{"add", "clear", "config", "disable", "list", "remove", "set", "snapshot", "test", "version"}
+var commands = []string{"add", "clear", "config", "disable", "list", "pin", "remove", "set", "snapshot", "test", "version"}
 
 const usage = "usage: howdy [-U USER] [--plain] [-h] [-y] command [arguments...]\n"
 
@@ -15,10 +15,10 @@ Command line interface for Howdy face authentication.
 
 positional arguments:
   command          The command option to execute, can be one of the following:
-                   add, clear, config, disable, list, remove, snapshot, set,
-                   test or version.
-  arguments        Optional arguments for the add, disable, remove and set
-                   commands.
+                   add, clear, config, disable, list, pin, remove, snapshot,
+                   set, test or version.
+  arguments        Optional arguments for the add, disable, pin, remove
+                   and set commands.
 
 options:
   -U, --user USER  Set the user account to use.

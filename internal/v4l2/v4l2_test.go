@@ -3,6 +3,7 @@ package v4l2
 import (
 	"bytes"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 	"unsafe"
@@ -276,8 +277,12 @@ func TestNewestWins(t *testing.T) {
 
 func TestUnsupported(t *testing.T) {
 	d := &fakeDevice{formats: []uint32{0x47504a4d}, width: 2, height: 2, stride: 2}
-	if _, err := Start(d, 0, 0, 0); err == nil {
-		t.Error("MJPEG only camera accepted")
+	_, err := Start(d, 0, 0, 0)
+	if err == nil {
+		t.Fatal("MJPEG only camera accepted")
+	}
+	if !strings.Contains(err.Error(), "only MJPG") {
+		t.Errorf("error doesn't say what the camera offers: %v", err)
 	}
 	if !d.closed {
 		t.Error("device left open")
@@ -295,5 +300,43 @@ func TestExposure(t *testing.T) {
 	}
 	if d.controls[CIDExposureAuto] != 1 {
 		t.Error("control not set")
+	}
+}
+
+// yuyvFrame is a w x h frame with luma 100 and the given U and V
+func yuyvFrame(w, h int, u, v byte) []byte {
+	b := make([]byte, w*h*2)
+	for i := 0; i < len(b); i += 4 {
+		b[i], b[i+1], b[i+2], b[i+3] = 100, u, 100, v
+	}
+	return b
+}
+
+func TestColour(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		fmt  uint32
+		data []byte
+		want bool
+	}{
+		{"YUYV with flat chroma, an IR camera", PixFmtYUYV, yuyvFrame(64, 16, 128, 128), false},
+		{"YUYV with a little noise", PixFmtYUYV, yuyvFrame(64, 16, 129, 127), false},
+		{"YUYV with colour, a webcam", PixFmtYUYV, yuyvFrame(64, 16, 100, 150), true},
+		{"GREY has no chroma", PixFmtGrey, make([]byte, 64*16), false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			d := &fakeDevice{formats: []uint32{tt.fmt}, width: 64, height: 16, stride: len(tt.data) / 16}
+			c, err := Start(d, 0, 0, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			d.frames = []readyFrame{{data: tt.data}}
+			if _, err := c.Read(time.Second, nil); err != nil {
+				t.Fatal(err)
+			}
+			if got := c.Colour(); got != tt.want {
+				t.Errorf("Colour() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }

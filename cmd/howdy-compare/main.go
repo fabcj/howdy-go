@@ -11,16 +11,16 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"howdy-go/internal/backend"
-	"howdy-go/internal/backend/loader"
-	"howdy-go/internal/camera"
-	"howdy-go/internal/compare"
-	"howdy-go/internal/config"
-	"howdy-go/internal/harden"
-	"howdy-go/internal/imgproc"
-	"howdy-go/internal/model"
-	"howdy-go/internal/paths"
-	"howdy-go/internal/snapshot"
+	"github.com/fabcj/howdy-go/internal/backend"
+	"github.com/fabcj/howdy-go/internal/backend/loader"
+	"github.com/fabcj/howdy-go/internal/camera"
+	"github.com/fabcj/howdy-go/internal/compare"
+	"github.com/fabcj/howdy-go/internal/config"
+	"github.com/fabcj/howdy-go/internal/harden"
+	"github.com/fabcj/howdy-go/internal/imgproc"
+	"github.com/fabcj/howdy-go/internal/model"
+	"github.com/fabcj/howdy-go/internal/paths"
+	"github.com/fabcj/howdy-go/internal/snapshot"
 )
 
 // Generous caps that still stop a runaway. The CNN detector at upsample 1

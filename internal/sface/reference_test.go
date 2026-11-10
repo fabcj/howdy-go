@@ -10,9 +10,9 @@ import (
 	"strconv"
 	"testing"
 
-	"howdy-go/internal/backend"
-	"howdy-go/internal/imgproc"
-	"howdy-go/internal/onnx"
+	"github.com/fabcj/howdy-go/internal/backend"
+	"github.com/fabcj/howdy-go/internal/imgproc"
+	"github.com/fabcj/howdy-go/internal/onnx"
 )
 
 // Compares against OpenCV's FaceDetectorYN and FaceRecognizerSF. Set

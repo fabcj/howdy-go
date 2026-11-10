@@ -5,8 +5,8 @@ import (
 	"math"
 	"sort"
 
-	"howdy-go/internal/imgproc"
-	"howdy-go/internal/onnx"
+	"github.com/fabcj/howdy-go/internal/imgproc"
+	"github.com/fabcj/howdy-go/internal/onnx"
 )
 
 // Detection is one row of cv::FaceDetectorYN's output

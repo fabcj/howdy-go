@@ -1,0 +1,24 @@
+version: "2"
+
+# `make lint`. CI runs the same checks through vet and staticcheck, with the
+# build tags that leave out dlib and ONNX Runtime; run this one without tags
+# so the cgo wrappers are checked too.
+linters:
+  default: standard
+  enable:
+    - errorlint
+    - misspell
+    - nolintlint
+    - unconvert
+  exclusions:
+    presets:
+      - std-error-handling
+    rules:
+      # Test setup that fails shows up in the assertions after it
+      - path: _test\.go
+        linters:
+          - errcheck
+
+formatters:
+  enable:
+    - gofmt

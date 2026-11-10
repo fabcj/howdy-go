@@ -130,8 +130,8 @@ func Save(dir, user string, gid int, m *Models) error {
 	ok := false
 	defer func() {
 		if !ok {
-			f.Close()
-			unix.Unlink(tmp)
+			_ = f.Close()
+			_ = unix.Unlink(tmp)
 		}
 	}()
 

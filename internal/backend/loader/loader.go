@@ -3,11 +3,11 @@
 package loader
 
 import (
-	"howdy-go/internal/config"
-	"howdy-go/internal/dlib"
-	"howdy-go/internal/face"
-	"howdy-go/internal/paths"
-	"howdy-go/internal/sface"
+	"github.com/fabcj/howdy-go/internal/config"
+	"github.com/fabcj/howdy-go/internal/dlib"
+	"github.com/fabcj/howdy-go/internal/face"
+	"github.com/fabcj/howdy-go/internal/paths"
+	"github.com/fabcj/howdy-go/internal/sface"
 )
 
 // Load loads the named recogniser: "dlib" or "sface"

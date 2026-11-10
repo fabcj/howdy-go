@@ -1,0 +1,126 @@
+# Maintainer: fabcj <267183455+fabcj at users dot noreply dot github dot com>
+#
+# The PAM module and howdy-gtk come from upstream Howdy at a pinned commit,
+# with pam-compare-path.patch so the module runs howdy-compare directly, and
+# pam-pin.patch for its pin argument (a PIN asked for after a face match).
+#
+# The release package, built from a tagged tarball. howdy-go-git has the same
+# recipe for the default branch. To release: tag vX.Y.Z, set pkgver, run
+# updpkgsums (the first checksum below is a placeholder until then) and
+# makepkg --printsrcinfo > .SRCINFO.
+
+pkgname=howdy-go
+pkgver=0.1.0
+pkgrel=1
+_dir=$pkgname-$pkgver
+pkgdesc="Windows Hello style facial authentication for Linux, with the compare step in Go"
+arch=('x86_64')
+url="https://github.com/fabcj/howdy-go"
+license=('MIT' 'Apache-2.0')
+makedepends=('git' 'go' 'meson' 'ninja' 'cmake' 'pkgconf' 'python')
+depends=('dlib' 'onnxruntime' 'libinih' 'libevdev' 'libxcrypt' 'pam' 'glibc')
+optdepends=('python-gobject: howdy-gtk login popup and settings window'
+            'gtk3: howdy-gtk login popup and settings window'
+            'python-cairo: howdy-gtk login popup'
+            'python-opencv: howdy-gtk camera preview'
+            'blas-openblas: face encoding about 15x faster than the reference BLAS')
+provides=('howdy')
+conflicts=('howdy' 'howdy-git' 'howdy-go-git')
+backup=('etc/howdy/config.ini')
+install=howdy.install
+options=('!debug')
+_howdy_commit=d3ab99382f88f043d15f15c1450ab69433892a1c
+# recognizer = sface: YuNet (MIT) and SFace (Apache-2.0) from OpenCV Zoo at a
+# pinned commit. howdy-compare checks the same sha256s before loading them.
+_zoo_commit=48b10fa505aeb51fbd127fc60a5c660040e823b7
+_zoo=https://media.githubusercontent.com/media/opencv/opencv_zoo/$_zoo_commit/models
+_zoo_raw=https://raw.githubusercontent.com/opencv/opencv_zoo/$_zoo_commit/models
+source=(
+	"$_dir.tar.gz::$url/archive/v$pkgver.tar.gz"
+	"howdy::git+https://github.com/boltgolt/howdy.git#commit=$_howdy_commit"
+	"https://github.com/davisking/dlib-models/raw/master/dlib_face_recognition_resnet_model_v1.dat.bz2"
+	"https://github.com/davisking/dlib-models/raw/master/mmod_human_face_detector.dat.bz2"
+	"https://github.com/davisking/dlib-models/raw/master/shape_predictor_5_face_landmarks.dat.bz2"
+	"polkit-agent-helper-howdy.conf"
+	"$_zoo/face_detection_yunet/face_detection_yunet_2026may.onnx"
+	"$_zoo/face_recognition_sface/face_recognition_sface_2021dec.onnx"
+	"yunet.LICENSE::$_zoo_raw/face_detection_yunet/LICENSE"
+	"sface.LICENSE::$_zoo_raw/face_recognition_sface/LICENSE"
+	"pam-compare-path.patch"
+	"pam-pin.patch"
+)
+sha256sums=('SKIP'
+            'SKIP'
+            'abb1f61041e434465855ce81c2bd546e830d28bcbed8d27ffbe5bb408b11553a'
+            'db9e9e40f092c118d5eb3e643935b216838170793559515541c56a2b50d9fc84'
+            '6e787bbebf5c9efdb793f6cd1f023230c4413306605f24f299f12869f95aa472'
+            '2283fc4684751caa41e87023755bba5c3468475b6ed632b13a4ac6e9c748c512'
+            'ebafce4e3c118d6554634be5c27ab333b4c047a9a8c3faf1d7cf93101c22f0f0'
+            '0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79'
+            'c83b8120c50ccbd4c4f96edf53141bdd566ebb8f8e9227e415326aa1b1aba958'
+            'cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30'
+            '8dc8a727209d7aff8c2a17f21f6a903d4a195d63e2471e758e49e94077704724'
+            '0601f786f5427816dfffdf1593fa754d4d92a3271007b5f35aeb47d8f067cb29')
+
+_compare=/usr/lib/howdy-go/howdy-compare
+
+prepare() {
+	patch -d howdy -Np1 -i "$srcdir/pam-compare-path.patch"
+	patch -d howdy -Np1 -i "$srcdir/pam-pin.patch"
+
+	cd "$_dir"
+	export GOPATH="$srcdir/gopath"
+	go mod download -x
+}
+
+build() {
+	cd "$srcdir/$_dir"
+	export GOPATH="$srcdir/gopath"
+	export CGO_CPPFLAGS="${CPPFLAGS}"
+	export CGO_CFLAGS="${CFLAGS}"
+	export CGO_CXXFLAGS="${CXXFLAGS}"
+	export CGO_LDFLAGS="${LDFLAGS}"
+	# Flags, install paths and version are in the Makefile
+	make VERSION="$pkgver" build
+
+	cd "$srcdir"
+	arch-meson howdy build -Dcompare_path=$_compare -Dpython_path=/usr/bin/python \
+		-Dpin_dir=/etc/howdy/pin -Dpin_user_dir=/etc/howdy/pin-user
+	meson compile -C build
+}
+
+check() {
+	cd "$srcdir/$_dir"
+	export GOPATH="$srcdir/gopath"
+	make test check-hardening
+}
+
+package() {
+	cd "$srcdir"
+	meson install -C build --destdir "$pkgdir"
+
+	# The Python CLI and compare.py are replaced by the Go programs
+	rm -r "$pkgdir/usr/lib/howdy"
+	rm "$pkgdir/usr/bin/howdy"
+	make -C "$_dir" DESTDIR="$pkgdir" install
+
+	install -Dm644 howdy/howdy/src/config.ini "$pkgdir/etc/howdy/config.ini"
+	# Where howdy pin set keeps the PIN hashes, root only
+	install -dm700 "$pkgdir/etc/howdy/pin"
+	# The lock screen PINs, files owned by their users in a directory only root can change
+	install -dm755 "$pkgdir/etc/howdy/pin-user"
+	install -Dm644 "$_dir/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+	install -Dm644 howdy/LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE.howdy"
+	install -Dm644 *.dat -t "$pkgdir/usr/share/dlib-data"
+	install -Dm644 face_detection_yunet_2026may.onnx face_recognition_sface_2021dec.onnx \
+		-t "$pkgdir/usr/share/howdy-go/onnx"
+	install -Dm644 yunet.LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE.yunet"
+	install -Dm644 sface.LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE.sface"
+	# Loads much faster than dlib's built in copy
+	"$_dir/bin/save-frontal-detector""$pkgdir/usr/share/dlib-data/frontal_face_detector.svm"
+	chmod 644 "$pkgdir/usr/share/dlib-data/frontal_face_detector.svm"
+
+	# polkit 127+ breaks howdy without this (boltgolt/howdy#1077)
+	install -Dm644 polkit-agent-helper-howdy.conf \
+		"$pkgdir/usr/lib/systemd/system/polkit-agent-helper@.service.d/10-howdy.conf"
+}

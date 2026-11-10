@@ -6,6 +6,7 @@ package v4l2
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 	"unsafe"
 )
@@ -142,6 +143,9 @@ type Camera struct {
 	Height       int
 	Bytesperline int
 	Pixelformat  uint32
+
+	// The largest chroma spread of any YUYV frame read so far, see Colour
+	chroma float64
 }
 
 // Start configures the device and starts streaming. width, height and fps
@@ -172,7 +176,7 @@ func (c *Camera) start(width, height, fps int) error {
 	case contains(formats, PixFmtYUYV):
 		want = PixFmtYUYV
 	default:
-		return errors.New("camera has no GREY or YUYV format")
+		return fmt.Errorf("camera has no GREY or YUYV format, only %s", fourccs(formats))
 	}
 
 	f := format{Type: bufTypeVideoCapture}
@@ -316,6 +320,9 @@ func (c *Camera) Read(timeout time.Duration, dst []byte) ([]byte, error) {
 		good := b.Flags&bufFlagError == 0 && used >= need && used <= len(mem)
 		if good {
 			dst = c.copyGrey(mem[:need], dst)
+			if c.Pixelformat == PixFmtYUYV {
+				c.chroma = max(c.chroma, chromaSpread(mem[:need], c.Width, c.Height, c.Bytesperline))
+			}
 		}
 		// The buffer gets refilled once it's queued again
 		if err := c.dev.Ioctl(vidiocQbuf, unsafe.Pointer(b)); err != nil {
@@ -325,6 +332,55 @@ func (c *Camera) Read(timeout time.Duration, dst []byte) ([]byte, error) {
 			return dst, nil
 		}
 	}
+}
+
+// colourSpread is the mean distance of a YUYV frame's chroma from neutral
+// grey, in levels, above which a camera counts as a colour one. A guess:
+// IR cameras that use YUYV send flat chroma, but no colour camera was
+// measured to set it.
+const colourSpread = 3.0
+
+// Colour reports whether the frames so far had colour in them, which means
+// a regular webcam and not an IR camera. Only YUYV frames carry chroma; a
+// GREY camera is never reported as colour.
+func (c *Camera) Colour() bool {
+	return c.chroma > colourSpread
+}
+
+// chromaSpread samples every fourth row and eighth pixel pair of a YUYV
+// frame for how far U and V are from 128 on average
+func chromaSpread(src []byte, width, height, stride int) float64 {
+	var sum float64
+	var n int
+	for y := 0; y < height; y += 4 {
+		row := src[y*stride:]
+		for x := 0; x+1 < width; x += 16 {
+			for _, v := range [2]byte{row[2*x+1], row[2*x+3]} {
+				if v > 128 {
+					sum += float64(v - 128)
+				} else {
+					sum += float64(128 - v)
+				}
+				n++
+			}
+		}
+	}
+	if n == 0 {
+		return 0
+	}
+	return sum / float64(n)
+}
+
+// fourccs spells out pixel formats, like "MJPG" and "YUYV"
+func fourccs(formats []uint32) string {
+	if len(formats) == 0 {
+		return "none"
+	}
+	var parts []string
+	for _, f := range formats {
+		parts = append(parts, string([]byte{byte(f), byte(f >> 8), byte(f >> 16), byte(f >> 24)}))
+	}
+	return strings.Join(parts, ", ")
 }
 
 func (c *Camera) copyGrey(src, dst []byte) []byte {

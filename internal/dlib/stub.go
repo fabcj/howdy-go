@@ -7,8 +7,8 @@ package dlib
 import (
 	"errors"
 
-	"howdy-go/internal/face"
-	"howdy-go/internal/imgproc"
+	"github.com/fabcj/howdy-go/internal/face"
+	"github.com/fabcj/howdy-go/internal/imgproc"
 )
 
 // Available is false in this build

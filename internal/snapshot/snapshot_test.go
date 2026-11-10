@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"howdy-go/internal/imgproc"
+	"github.com/fabcj/howdy-go/internal/imgproc"
 )
 
 func frames(n int) []*imgproc.Gray {

@@ -5,9 +5,9 @@ import (
 	"sync"
 	"time"
 
-	"howdy-go/internal/config"
-	"howdy-go/internal/imgproc"
-	"howdy-go/internal/v4l2"
+	"github.com/fabcj/howdy-go/internal/config"
+	"github.com/fabcj/howdy-go/internal/imgproc"
+	"github.com/fabcj/howdy-go/internal/v4l2"
 )
 
 // Camera reads grey frames from a V4L2 device
@@ -37,6 +37,10 @@ func (c *Camera) Read(timeout time.Duration) (*imgproc.Gray, error) {
 	}
 	return &imgproc.Gray{W: c.cam.Width, H: c.cam.Height, Pix: pix}, nil
 }
+
+// Colour reports whether the frames read so far came from a colour camera,
+// see v4l2.Camera.Colour
+func (c *Camera) Colour() bool { return c.cam.Colour() }
 
 // SetExposure switches to manual exposure at value
 func (c *Camera) SetExposure(value int) error {

@@ -11,8 +11,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"howdy-go/internal/imgproc"
-	"howdy-go/internal/paths"
+	"github.com/fabcj/howdy-go/internal/imgproc"
+	"github.com/fabcj/howdy-go/internal/paths"
 )
 
 // Compares against python-dlib. Set HOWDY_GO_TESTDATA to a directory

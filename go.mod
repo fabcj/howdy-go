@@ -1,4 +1,4 @@
-module howdy-go
+module github.com/fabcj/howdy-go
 
 go 1.27.3
 

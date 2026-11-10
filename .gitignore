@@ -15,10 +15,16 @@
 /testdata/live/
 
 # makepkg leftovers
-packaging/*/src/
-packaging/*/pkg/
-packaging/*/*/
-packaging/*/*.pkg.tar.*
-packaging/*/*.bz2
-packaging/*/*.onnx
-packaging/*/*.LICENSE
+packaging/**/src/
+packaging/**/pkg/
+packaging/**/*.pkg.tar.*
+packaging/**/*.bz2
+packaging/**/*.onnx
+packaging/**/*.LICENSE
+packaging/**/*.tar.gz
+packaging/arch/*.patch
+# makepkg's clones of howdy-go and Howdy
+/packaging/arch/howdy/
+/packaging/arch/howdy-go/
+/packaging/aur/*/howdy/
+/packaging/aur/*/howdy-go/

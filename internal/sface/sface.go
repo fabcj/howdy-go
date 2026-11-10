@@ -11,10 +11,10 @@ import (
 	"math"
 	"path/filepath"
 
-	"howdy-go/internal/backend"
-	"howdy-go/internal/face"
-	"howdy-go/internal/imgproc"
-	"howdy-go/internal/onnx"
+	"github.com/fabcj/howdy-go/internal/backend"
+	"github.com/fabcj/howdy-go/internal/face"
+	"github.com/fabcj/howdy-go/internal/imgproc"
+	"github.com/fabcj/howdy-go/internal/onnx"
 )
 
 // ScoreThreshold is the least YuNet score that counts as a face. Real faces
