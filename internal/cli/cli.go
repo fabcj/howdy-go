@@ -337,7 +337,7 @@ func (c *cmd) remove() int {
 	}
 
 	id := c.a.arguments[0]
-	found := slices.IndexFunc(m.Entries, func(e *model.Object) bool { return model.Str(e.Values["id"]) == id })
+	found := slices.IndexFunc(m.Entries, func(e *model.Entry) bool { return model.Str(e.Values["id"]) == id })
 	if found >= 0 && !c.a.yes {
 		if !c.confirm(fmt.Sprintf("This will remove the model called \"%s\" for %s", model.Label(m.Entries[found]), c.user)) {
 			return 1

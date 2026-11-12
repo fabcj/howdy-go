@@ -24,13 +24,13 @@ func sandbox(t *testing.T) paths.Layout {
 	return paths.Layout{SFaceModelsDir: t.TempDir(), ModelOwner: os.Geteuid()}
 }
 
-func dat(entries ...*model.Object) *model.Models {
+func dat(entries ...*model.Entry) *model.Models {
 	m := model.NewModels(model.EncodingSize)
 	m.Entries = append(m.Entries, entries...)
 	return m
 }
 
-func saveSFace(t *testing.T, dir string, entries ...*model.Object) {
+func saveSFace(t *testing.T, dir string, entries ...*model.Entry) {
 	t.Helper()
 	m := model.NewModels(spec.Size)
 	m.Entries = append(m.Entries, entries...)
