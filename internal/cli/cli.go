@@ -37,6 +37,7 @@ var Version = "dev"
 // Env is everything the CLI touches outside itself, so tests can fake it
 type Env struct {
 	Args   []string // without the program name
+	Paths  paths.Layout
 	Getenv func(string) string
 	Stdin  io.Reader
 	Stdout io.Writer
@@ -196,7 +197,7 @@ func (c *cmd) confirm(question string) bool {
 }
 
 func (c *cmd) settings() (*config.File, *config.Settings, error) {
-	f, err := config.Read(paths.ConfigFile())
+	f, err := config.Read(c.Paths.ConfigFile())
 	if err != nil {
 		return nil, nil, err
 	}
@@ -210,11 +211,11 @@ func dirExists(p string) bool {
 }
 
 func (c *cmd) loadModels() (*model.Models, error) {
-	return model.Load(paths.UserModelsDir, c.user, paths.ModelOwnerUID())
+	return model.Load(c.Paths.UserModelsDir, c.user, c.Paths.ModelOwner)
 }
 
 func (c *cmd) list() int {
-	if !dirExists(paths.UserModelsDir) {
+	if !dirExists(c.Paths.UserModelsDir) {
 		c.say("Face models have not been initialized yet, please run:")
 		c.printf("\n\tsudo howdy -U %s add\n\n", c.user)
 		return 1
@@ -259,17 +260,17 @@ func localTime(v model.Value) string {
 }
 
 func (c *cmd) clear() int {
-	if !dirExists(paths.UserModelsDir) {
+	if !dirExists(c.Paths.UserModelsDir) {
 		return c.fail("No models created yet, can't clear them if they don't exist")
 	}
-	p, _ := model.Path(paths.UserModelsDir, c.user)
+	p, _ := model.Path(c.Paths.UserModelsDir, c.user)
 	if st, err := os.Lstat(p); err != nil || !st.Mode().IsRegular() {
 		return c.fail("%s has no models or they have been cleared already", c.user)
 	}
 	if !c.a.yes && !c.confirm("This will clear all models for "+c.user) {
 		return 1
 	}
-	if err := model.Remove(paths.UserModelsDir, c.user); err != nil {
+	if err := model.Remove(c.Paths.UserModelsDir, c.user); err != nil {
 		return c.errorf("%v", err)
 	}
 	if err := c.removeSFace(); err != nil {
@@ -283,7 +284,7 @@ func (c *cmd) clear() int {
 // leftover file couldn't match anyway: compare only uses descriptors whose
 // model the .dat file still has.
 func (c *cmd) removeSFace() error {
-	err := model.Remove(paths.SFaceModelsDir, c.user)
+	err := model.Remove(c.Paths.SFaceModelsDir, c.user)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
@@ -293,7 +294,7 @@ func (c *cmd) removeSFace() error {
 // pruneSFace removes the sface descriptors whose model the .dat file (dat)
 // no longer has, if there are any
 func (c *cmd) pruneSFace(dat *model.Models) error {
-	m, err := model.LoadSize(paths.SFaceModelsDir, c.user, paths.ModelOwnerUID(), spec.Size)
+	m, err := model.LoadSize(c.Paths.SFaceModelsDir, c.user, c.Paths.ModelOwner, spec.Size)
 	if errors.Is(err, model.ErrNoModel) {
 		return nil
 	}
@@ -308,7 +309,7 @@ func (c *cmd) pruneSFace(dat *model.Models) error {
 	if err != nil {
 		return err
 	}
-	return model.Save(paths.SFaceModelsDir, c.user, gid, m)
+	return model.Save(c.Paths.SFaceModelsDir, c.user, gid, m)
 }
 
 func (c *cmd) remove() int {
@@ -320,7 +321,7 @@ func (c *cmd) remove() int {
 		c.say("\n\thowdy list\n")
 		return 1
 	}
-	if !dirExists(paths.UserModelsDir) {
+	if !dirExists(c.Paths.UserModelsDir) {
 		c.say("Face models have not been initialized yet, please run:")
 		c.say("\n\thowdy add\n")
 		return 1
@@ -348,7 +349,7 @@ func (c *cmd) remove() int {
 	}
 
 	if len(m.Entries) == 1 {
-		if err := model.Remove(paths.UserModelsDir, c.user); err != nil {
+		if err := model.Remove(c.Paths.UserModelsDir, c.user); err != nil {
 			return c.errorf("%v", err)
 		}
 		if err := c.removeSFace(); err != nil {
@@ -373,7 +374,7 @@ func (c *cmd) save(m *model.Models) error {
 	if err != nil {
 		return err
 	}
-	return model.Save(paths.UserModelsDir, c.user, gid, m)
+	return model.Save(c.Paths.UserModelsDir, c.user, gid, m)
 }
 
 func (c *cmd) config() int {
@@ -399,7 +400,7 @@ func (c *cmd) config() int {
 	}
 	c.printf("Opening config.ini in %s\n", name)
 	// As an argv, never through a shell
-	if err := c.Edit([]string{editor, paths.ConfigFile()}); err != nil {
+	if err := c.Edit([]string{editor, c.Paths.ConfigFile()}); err != nil {
 		c.printf("Failed to open editor: %v\n", err)
 	}
 	return 0
@@ -420,7 +421,7 @@ func (c *cmd) disable() int {
 		return c.fail("Please only use 0 (enable) or 1 (disable) as an argument")
 	}
 
-	f, err := config.Read(paths.ConfigFile())
+	f, err := config.Read(c.Paths.ConfigFile())
 	if err != nil {
 		return c.errorf("%v", err)
 	}
@@ -431,7 +432,7 @@ func (c *cmd) disable() int {
 	if err != nil {
 		return c.errorf("%v", err)
 	}
-	if err := writeConfig(paths.ConfigFile(), data); err != nil {
+	if err := writeConfig(c.Paths.ConfigFile(), data); err != nil {
 		return c.errorf("%v", err)
 	}
 	if value == "true" {
@@ -450,7 +451,7 @@ func (c *cmd) set() int {
 		return 1
 	}
 	key, value := c.a.arguments[0], c.a.arguments[1]
-	f, err := config.Read(paths.ConfigFile())
+	f, err := config.Read(c.Paths.ConfigFile())
 	if err != nil {
 		return c.errorf("%v", err)
 	}
@@ -475,7 +476,7 @@ func (c *cmd) set() int {
 	if err != nil {
 		return c.errorf("%v", err)
 	}
-	if err := writeConfig(paths.ConfigFile(), data); err != nil {
+	if err := writeConfig(c.Paths.ConfigFile(), data); err != nil {
 		return c.errorf("%v", err)
 	}
 	c.say("Config option updated")
@@ -610,10 +611,10 @@ func (c *cmd) snapshot() int {
 		"Date: " + now.UTC().Format("2006/01/02 15:04:05") + " UTC",
 		"Dark threshold config: " + pyfmt.Float(s.DarkThreshold),
 		"Certainty config: " + pyfmt.Float(s.Certainty),
-	}, snapshot.LoadLogo(paths.Logo()))
+	}, snapshot.LoadLogo(c.Paths.Logo()))
 	path := ""
 	if err == nil {
-		path, err = snapshot.Save(paths.SnapshotsDir(), now, img)
+		path, err = snapshot.Save(c.Paths.SnapshotsDir(), now, img)
 	}
 	if err != nil {
 		c.say("Could not save the snapshot")
@@ -625,7 +626,7 @@ func (c *cmd) snapshot() int {
 }
 
 func (c *cmd) add() int {
-	if msg := backend.MissingData(config.Dlib); msg != "" {
+	if msg := backend.MissingData(c.Paths, config.Dlib); msg != "" {
 		c.say(msg)
 		return 1
 	}
@@ -647,7 +648,7 @@ func (c *cmd) add() int {
 	// And the configured recogniser too, from the same frames
 	var extra face.Recognizer
 	if s.Recognizer != config.Dlib {
-		if msg := backend.MissingData(s.Recognizer); msg != "" {
+		if msg := backend.MissingData(c.Paths, s.Recognizer); msg != "" {
 			c.say(msg)
 			return 1
 		}
@@ -658,14 +659,14 @@ func (c *cmd) add() int {
 		defer extra.Close()
 	}
 
-	if !dirExists(paths.UserModelsDir) {
+	if !dirExists(c.Paths.UserModelsDir) {
 		c.say("No face model folder found, creating one")
 		// 0755 whatever the umask, the models loader refuses anything writable
 		// by others
-		if err := os.MkdirAll(paths.UserModelsDir, 0o755); err != nil {
+		if err := os.MkdirAll(c.Paths.UserModelsDir, 0o755); err != nil {
 			return c.errorf("%v", err)
 		}
-		if err := os.Chmod(paths.UserModelsDir, 0o755); err != nil {
+		if err := os.Chmod(c.Paths.UserModelsDir, 0o755); err != nil {
 			return c.errorf("%v", err)
 		}
 	}
@@ -813,7 +814,7 @@ func (c *cmd) add() int {
 	}
 
 	m.Entries = append(m.Entries, model.NewEntry(created, label, nextID, r.Encoding))
-	if err := model.Save(paths.UserModelsDir, c.user, gid, m); err != nil {
+	if err := model.Save(c.Paths.UserModelsDir, c.user, gid, m); err != nil {
 		return c.errorf("%v", err)
 	}
 	if extra != nil {
@@ -837,15 +838,15 @@ func (c *cmd) saveSFace(dat *model.Models, created int64, label string, id int64
 	if !c.a.plain {
 		c.printf("sface: used %d of %d frames, least similar %.2f\n", r.Used, r.Total, face.Cosine(r.Worst/10))
 	}
-	if !dirExists(paths.SFaceModelsDir) {
-		if err := os.MkdirAll(paths.SFaceModelsDir, 0o755); err != nil {
+	if !dirExists(c.Paths.SFaceModelsDir) {
+		if err := os.MkdirAll(c.Paths.SFaceModelsDir, 0o755); err != nil {
 			return err
 		}
-		if err := os.Chmod(paths.SFaceModelsDir, 0o755); err != nil {
+		if err := os.Chmod(c.Paths.SFaceModelsDir, 0o755); err != nil {
 			return err
 		}
 	}
-	m, err := model.LoadSize(paths.SFaceModelsDir, c.user, paths.ModelOwnerUID(), spec.Size)
+	m, err := model.LoadSize(c.Paths.SFaceModelsDir, c.user, c.Paths.ModelOwner, spec.Size)
 	if errors.Is(err, model.ErrNoModel) {
 		m, err = model.NewModels(spec.Size), nil
 	}
@@ -854,7 +855,7 @@ func (c *cmd) saveSFace(dat *model.Models, created int64, label string, id int64
 	}
 	m.Prune(dat)
 	m.Entries = append(m.Entries, model.NewTaggedEntry(created, label, id, enc, spec.Encoder))
-	return model.Save(paths.SFaceModelsDir, c.user, gid, m)
+	return model.Save(c.Paths.SFaceModelsDir, c.user, gid, m)
 }
 
 func truncateRunes(s string, n int) string {

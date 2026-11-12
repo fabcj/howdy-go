@@ -37,7 +37,8 @@ func TestParity(t *testing.T) {
 	}
 
 	for _, cnn := range []bool{false, true} {
-		m, err := Load(paths.HOGDetector(), paths.CNNDetector(), paths.ShapePredictor(), paths.Recognizer(), cnn, 0)
+		l := paths.Installed()
+		m, err := Load(l.HOGDetector(), l.CNNDetector(), l.ShapePredictor(), l.Recognizer(), cnn, 0)
 		if err != nil {
 			t.Fatal(err)
 		}

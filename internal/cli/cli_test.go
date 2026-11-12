@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -81,31 +80,28 @@ type testEnv struct {
 func setup(t *testing.T) *testEnv {
 	t.Helper()
 	dir := t.TempDir()
-	old := []string{paths.ConfigDir, paths.UserModelsDir, paths.DlibDataDir, paths.LogPath, paths.DataDir, paths.ModelOwner,
-		paths.ONNXDir, paths.SFaceModelsDir, paths.PinDir, paths.PinUserDir}
-	t.Cleanup(func() {
-		paths.ConfigDir, paths.UserModelsDir, paths.DlibDataDir, paths.LogPath, paths.DataDir, paths.ModelOwner,
-			paths.ONNXDir, paths.SFaceModelsDir, paths.PinDir, paths.PinUserDir = old[0], old[1], old[2], old[3], old[4], old[5], old[6], old[7], old[8], old[9]
-	})
-	paths.ConfigDir = dir
-	paths.UserModelsDir = filepath.Join(dir, "models")
-	paths.DlibDataDir = filepath.Join(dir, "dlib-data")
-	paths.LogPath = filepath.Join(dir, "log")
-	paths.DataDir = dir
-	paths.ModelOwner = strconv.Itoa(os.Getuid())
-	paths.ONNXDir = filepath.Join(dir, "onnx")
-	paths.SFaceModelsDir = filepath.Join(dir, "models-sface")
-	paths.PinDir = filepath.Join(dir, "pin")
-	paths.PinUserDir = filepath.Join(dir, "pin-user")
+	l := paths.Layout{
+		ConfigDir:      dir,
+		UserModelsDir:  filepath.Join(dir, "models"),
+		DlibDataDir:    filepath.Join(dir, "dlib-data"),
+		LogPath:        filepath.Join(dir, "log"),
+		DataDir:        dir,
+		ModelOwner:     os.Getuid(),
+		ONNXDir:        filepath.Join(dir, "onnx"),
+		SFaceModelsDir: filepath.Join(dir, "models-sface"),
+		PinDir:         filepath.Join(dir, "pin"),
+		PinUserDir:     filepath.Join(dir, "pin-user"),
+	}
 	os.Chmod(dir, 0o755)
-	os.Mkdir(paths.DlibDataDir, 0o755)
-	os.WriteFile(paths.ShapePredictor(), nil, 0o644)
+	os.Mkdir(l.DlibDataDir, 0o755)
+	os.WriteFile(l.ShapePredictor(), nil, 0o644)
 	os.WriteFile(filepath.Join(dir, "video0"), nil, 0o644)
-	os.WriteFile(paths.ConfigFile(), []byte("[core]\ndisabled = false\n\n[video]\ncertainty = 3.5\ndevice_path = "+
+	os.WriteFile(l.ConfigFile(), []byte("[core]\ndisabled = false\n\n[video]\ncertainty = 3.5\ndevice_path = "+
 		filepath.Join(dir, "video0")+"\nenroll_frames = 5\ndark_threshold = 60\n"), 0o644)
 
 	te := &testEnv{dir: dir, clock: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC), stop: make(chan os.Signal, 1)}
 	te.Env = &Env{
+		Paths:       l,
 		Getenv:      func(k string) string { return map[string]string{"SUDO_USER": "alice"}[k] },
 		Stdin:       strings.NewReader(""),
 		Stdout:      &te.out,
@@ -248,7 +244,7 @@ func TestAddListRemove(t *testing.T) {
 			t.Errorf("add output lacks %q:\n%s", want, te.out.String())
 		}
 	}
-	st, err := os.Stat(filepath.Join(paths.UserModelsDir, "alice.dat"))
+	st, err := os.Stat(filepath.Join(te.Paths.UserModelsDir, "alice.dat"))
 	if err != nil || st.Mode().Perm() != 0o640 {
 		t.Fatalf("model file %v %v", st, err)
 	}
@@ -309,7 +305,7 @@ func TestAddRefusals(t *testing.T) {
 	if code := te.run("add", "-y"); code != 1 || !strings.HasSuffix(te.out.String(), "Camera saw only black frames - is IR emitter working?\n") {
 		t.Errorf("black: %d %q", code, te.out.String())
 	}
-	if _, err := os.Stat(filepath.Join(paths.UserModelsDir, "alice.dat")); err == nil {
+	if _, err := os.Stat(filepath.Join(te.Paths.UserModelsDir, "alice.dat")); err == nil {
 		t.Error("a failed add wrote a model")
 	}
 }
@@ -325,7 +321,7 @@ func TestPythonReadsOurModel(t *testing.T) {
 	if code := te.run("add", "x", "-y"); code != 0 {
 		t.Fatal(te.out.String())
 	}
-	p := filepath.Join(paths.UserModelsDir, "alice.dat")
+	p := filepath.Join(te.Paths.UserModelsDir, "alice.dat")
 	data, _ := os.ReadFile(p)
 	// What Howdy's list.py and compare.py do with it
 	out, err := exec.Command(py, "-I", "-c", `
@@ -367,11 +363,11 @@ func TestDisableSet(t *testing.T) {
 	if code := te.run("set", "certainty", "3 ; x"); code != 1 {
 		t.Errorf("set to an ambiguous value: %d", code)
 	}
-	data, _ := os.ReadFile(paths.ConfigFile())
+	data, _ := os.ReadFile(te.Paths.ConfigFile())
 	if !strings.Contains(string(data), "disabled = true\n") || !strings.Contains(string(data), "certainty = 3\n") {
 		t.Errorf("config now:\n%s", data)
 	}
-	st, _ := os.Stat(paths.ConfigFile())
+	st, _ := os.Stat(te.Paths.ConfigFile())
 	if st.Mode().Perm() != 0o644 {
 		t.Errorf("config mode changed to %v", st.Mode())
 	}
@@ -382,7 +378,7 @@ func TestConfigEditor(t *testing.T) {
 	if code := te.run("config"); code != 0 || te.out.String() != "Opening config.ini in nano\n" {
 		t.Errorf("config: %d %q", code, te.out.String())
 	}
-	if len(te.edited) != 2 || te.edited[0] != "/usr/bin/nano" || te.edited[1] != paths.ConfigFile() {
+	if len(te.edited) != 2 || te.edited[0] != "/usr/bin/nano" || te.edited[1] != te.Paths.ConfigFile() {
 		t.Errorf("editor argv %v", te.edited)
 	}
 }
@@ -394,7 +390,7 @@ func TestSnapshot(t *testing.T) {
 		t.Fatalf("snapshot: %d %q", code, te.out.String())
 	}
 	path := strings.TrimSpace(strings.TrimPrefix(te.out.String(), "Generated snapshot saved as\n"))
-	if filepath.Dir(path) != paths.SnapshotsDir() {
+	if filepath.Dir(path) != te.Paths.SnapshotsDir() {
 		t.Errorf("saved to %s", path)
 	}
 }
@@ -491,7 +487,7 @@ func TestPin(t *testing.T) {
 	if st, err := os.Stat(pinFile); err != nil || st.Mode().Perm() != 0o600 {
 		t.Fatalf("pin file: %v %v", st, err)
 	}
-	hash, err := pin.Load(paths.PinDir, "alice", os.Geteuid())
+	hash, err := pin.Load(te.Paths.PinDir, "alice", os.Geteuid())
 	if err != nil || !pin.Verify("4821", hash) || pin.Verify("4822", hash) {
 		t.Errorf("stored hash doesn't check: %v", err)
 	}
@@ -566,7 +562,7 @@ func TestPinLockScreen(t *testing.T) {
 	if c, _ := os.ReadFile(userFile + ".fail"); string(c) != "0\n" {
 		t.Errorf("counter %q, the module can't create it so it must exist", c)
 	}
-	hash, err := pin.Load(paths.PinUserDir, "alice", os.Geteuid())
+	hash, err := pin.Load(te.Paths.PinUserDir, "alice", os.Geteuid())
 	if err != nil || !pin.Verify("4821", hash) {
 		t.Errorf("stored hash: %v", err)
 	}
@@ -633,16 +629,16 @@ func TestAddSFace(t *testing.T) {
 	te := setup(t)
 	te.frames = []*imgproc.Gray{litFrame()}
 	te.faces = 1
-	cfg, _ := os.ReadFile(paths.ConfigFile())
+	cfg, _ := os.ReadFile(te.Paths.ConfigFile())
 	cfg = bytes.Replace(cfg, []byte("[core]\n"), []byte("[core]\nrecognizer = sface\n"), 1)
-	os.WriteFile(paths.ConfigFile(), cfg, 0o644)
+	os.WriteFile(te.Paths.ConfigFile(), cfg, 0o644)
 
 	if code := te.run("add", "-y"); code != 1 || !strings.Contains(te.out.String(), "The sface models are missing") {
 		t.Fatalf("add without the ONNX files: exit %d %q", code, te.out.String())
 	}
-	os.Mkdir(paths.ONNXDir, 0o755)
-	os.WriteFile(filepath.Join(paths.ONNXDir, spec.YuNetFile), nil, 0o644)
-	os.WriteFile(filepath.Join(paths.ONNXDir, spec.SFaceFile), nil, 0o644)
+	os.Mkdir(te.Paths.ONNXDir, 0o755)
+	os.WriteFile(filepath.Join(te.Paths.ONNXDir, spec.YuNetFile), nil, 0o644)
+	os.WriteFile(filepath.Join(te.Paths.ONNXDir, spec.SFaceFile), nil, 0o644)
 
 	te.loaded = nil
 	for i := 0; i < 2; i++ {
@@ -656,11 +652,11 @@ func TestAddSFace(t *testing.T) {
 	if !strings.Contains(te.out.String(), "sface: used 5 of 5 frames, least similar ") {
 		t.Errorf("add output:\n%s", te.out.String())
 	}
-	dat, err := model.Load(paths.UserModelsDir, "alice", os.Getuid())
+	dat, err := model.Load(te.Paths.UserModelsDir, "alice", os.Getuid())
 	if err != nil {
 		t.Fatal(err)
 	}
-	sf, err := model.LoadSize(paths.SFaceModelsDir, "alice", os.Getuid(), spec.Size)
+	sf, err := model.LoadSize(te.Paths.SFaceModelsDir, "alice", os.Getuid(), spec.Size)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -674,7 +670,7 @@ func TestAddSFace(t *testing.T) {
 	if math.Abs(norm-1) > 1e-9 {
 		t.Errorf("stored sface descriptor has length^2 %v", norm)
 	}
-	st, err := os.Stat(filepath.Join(paths.SFaceModelsDir, "alice.dat"))
+	st, err := os.Stat(filepath.Join(te.Paths.SFaceModelsDir, "alice.dat"))
 	if err != nil || st.Mode().Perm() != 0o640 {
 		t.Errorf("sface file %v %v", st, err)
 	}
@@ -682,14 +678,14 @@ func TestAddSFace(t *testing.T) {
 	if code := te.run("remove", "0", "-y"); code != 0 {
 		t.Fatalf("remove: %d %q", code, te.out.String())
 	}
-	sf, _ = model.LoadSize(paths.SFaceModelsDir, "alice", os.Getuid(), spec.Size)
+	sf, _ = model.LoadSize(te.Paths.SFaceModelsDir, "alice", os.Getuid(), spec.Size)
 	if len(sf.Entries) != 1 {
 		t.Errorf("%d sface entries after removing one of two", len(sf.Entries))
 	}
 	if code := te.run("clear", "-y"); code != 0 {
 		t.Fatalf("clear: %d %q", code, te.out.String())
 	}
-	if _, err := os.Stat(filepath.Join(paths.SFaceModelsDir, "alice.dat")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(te.Paths.SFaceModelsDir, "alice.dat")); !os.IsNotExist(err) {
 		t.Errorf("sface file left after clear: %v", err)
 	}
 }
@@ -701,13 +697,13 @@ func TestSFaceOrphanNotRevived(t *testing.T) {
 	te := setup(t)
 	te.frames = []*imgproc.Gray{litFrame()}
 	te.faces = 1
-	os.Mkdir(paths.ONNXDir, 0o755)
-	os.WriteFile(filepath.Join(paths.ONNXDir, spec.YuNetFile), nil, 0o644)
-	os.WriteFile(filepath.Join(paths.ONNXDir, spec.SFaceFile), nil, 0o644)
-	base, _ := os.ReadFile(paths.ConfigFile())
+	os.Mkdir(te.Paths.ONNXDir, 0o755)
+	os.WriteFile(filepath.Join(te.Paths.ONNXDir, spec.YuNetFile), nil, 0o644)
+	os.WriteFile(filepath.Join(te.Paths.ONNXDir, spec.SFaceFile), nil, 0o644)
+	base, _ := os.ReadFile(te.Paths.ConfigFile())
 	use := func(name string) {
 		cfg := bytes.Replace(base, []byte("[core]\n"), []byte("[core]\nrecognizer = "+name+"\n"), 1)
-		os.WriteFile(paths.ConfigFile(), cfg, 0o644)
+		os.WriteFile(te.Paths.ConfigFile(), cfg, 0o644)
 	}
 
 	use("sface")
@@ -717,9 +713,9 @@ func TestSFaceOrphanNotRevived(t *testing.T) {
 		}
 	}
 	// Model 1 removed from the .dat file only
-	dat, _ := model.Load(paths.UserModelsDir, "alice", os.Getuid())
+	dat, _ := model.Load(te.Paths.UserModelsDir, "alice", os.Getuid())
 	dat.Entries = dat.Entries[:1]
-	if err := model.Save(paths.UserModelsDir, "alice", os.Getgid(), dat); err != nil {
+	if err := model.Save(te.Paths.UserModelsDir, "alice", os.Getgid(), dat); err != nil {
 		t.Fatal(err)
 	}
 	te.clock = te.clock.Add(time.Hour)
@@ -728,12 +724,12 @@ func TestSFaceOrphanNotRevived(t *testing.T) {
 		t.Fatalf("dlib add: exit %d\n%s", code, te.out.String())
 	}
 
-	dat, _ = model.Load(paths.UserModelsDir, "alice", os.Getuid())
+	dat, _ = model.Load(te.Paths.UserModelsDir, "alice", os.Getuid())
 	if id, _ := model.ID(dat.Entries[1]); id != 1 {
 		t.Fatalf("the dlib add got id %d, this test needs it to reuse 1", id)
 	}
 	s := &config.Settings{Recognizer: "sface"}
-	known, owner, err := backend.Known(s, "alice", dat)
+	known, owner, err := backend.Known(te.Paths, s, "alice", dat)
 	if err != nil || len(known) != 1 || owner[0] != 0 {
 		t.Errorf("sface matches %d descriptors, owners %v, err %v; want only model 0's", len(known), owner, err)
 	}

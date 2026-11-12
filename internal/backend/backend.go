@@ -26,18 +26,18 @@ const NoDeviceText = "Howdy could not find a camera device at the path specified
 
 // MissingData says what to do when the named recogniser's model files
 // aren't installed, or "" when they are
-func MissingData(name config.Recognizer) string {
+func MissingData(l paths.Layout, name config.Recognizer) string {
 	if name == config.SFace {
 		for _, f := range []string{spec.YuNetFile, spec.SFaceFile} {
-			if _, err := os.Stat(filepath.Join(paths.ONNXDir, f)); err != nil {
-				return fmt.Sprintf("The sface models are missing from %s, reinstall howdy-go or set recognizer = dlib", paths.ONNXDir)
+			if _, err := os.Stat(filepath.Join(l.ONNXDir, f)); err != nil {
+				return fmt.Sprintf("The sface models are missing from %s, reinstall howdy-go or set recognizer = dlib", l.ONNXDir)
 			}
 		}
 		return ""
 	}
-	if _, err := os.Stat(paths.ShapePredictor()); err != nil {
+	if _, err := os.Stat(l.ShapePredictor()); err != nil {
 		return "Data files have not been downloaded, please run the following commands:\n\n\tcd " +
-			paths.DlibDataDir + "\n\tsudo ./install.sh\n"
+			l.DlibDataDir + "\n\tsudo ./install.sh\n"
 	}
 	return ""
 }
@@ -71,12 +71,12 @@ var ErrNotEnrolled = errors.New("no sface model, run howdy add again")
 // Known is what compare matches against for the configured recogniser. dat
 // is the user's .dat file, which decides which models exist; owner indexes
 // its entries.
-func Known(s *config.Settings, user string, dat *model.Models) (known [][]float64, owner []int, err error) {
+func Known(l paths.Layout, s *config.Settings, user string, dat *model.Models) (known [][]float64, owner []int, err error) {
 	if s.Recognizer != config.SFace {
 		known, owner = dat.Flat()
 		return known, owner, nil
 	}
-	m, err := model.LoadSize(paths.SFaceModelsDir, user, paths.ModelOwnerUID(), spec.Size)
+	m, err := model.LoadSize(l.SFaceModelsDir, user, l.ModelOwner, spec.Size)
 	if errors.Is(err, model.ErrNoModel) {
 		return nil, nil, ErrNotEnrolled
 	}

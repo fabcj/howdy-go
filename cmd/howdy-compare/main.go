@@ -32,7 +32,7 @@ const (
 )
 
 func main() {
-	os.Exit(run())
+	os.Exit(run(paths.Installed()))
 }
 
 func fail(code int, format string, args ...any) int {
@@ -40,7 +40,8 @@ func fail(code int, format string, args ...any) int {
 	return code
 }
 
-func run() int {
+// run is howdy-compare with the given install layout
+func run(l paths.Layout) int {
 	start := time.Now()
 	if err := harden.CheckNoNewPrivs(); err != nil {
 		return fail(compare.Abort, "%v", err)
@@ -55,7 +56,7 @@ func run() int {
 	}
 
 	// The model comes first, like compare.py, so a missing one is always 10
-	models, err := model.Load(paths.UserModelsDir, user, paths.ModelOwnerUID())
+	models, err := model.Load(l.UserModelsDir, user, l.ModelOwner)
 	if errors.Is(err, model.ErrNoModel) {
 		return compare.NoFaceModel
 	}
@@ -72,7 +73,7 @@ func run() int {
 		labels[i] = model.Label(e)
 	}
 
-	file, err := config.Read(paths.ConfigFile())
+	file, err := config.Read(l.ConfigFile())
 	if err != nil {
 		return fail(compare.Abort, "%v", err)
 	}
@@ -91,7 +92,7 @@ func run() int {
 
 	// With sface, only its descriptors for models the .dat file still lists.
 	// None means the password, not falling back to dlib
-	known, owner, err := backend.Known(s, user, models)
+	known, owner, err := backend.Known(l, s, user, models)
 	if errors.Is(err, backend.ErrNotEnrolled) {
 		return fail(compare.NoFaceModel, "%v", err)
 	}
@@ -109,7 +110,7 @@ func run() int {
 		return compare.BadDevice
 	}
 
-	if msg := backend.MissingData(s.Recognizer); msg != "" {
+	if msg := backend.MissingData(l, s.Recognizer); msg != "" {
 		fmt.Println(msg)
 		return compare.Abort
 	}
@@ -130,7 +131,7 @@ func run() int {
 	}()
 
 	t := time.Now()
-	faces, faceErr := loader.Load(s, s.Recognizer)
+	faces, faceErr := loader.Load(l, s, s.Recognizer)
 	modelsTook := time.Since(t)
 	cr := <-camDone
 
@@ -179,13 +180,13 @@ func run() int {
 		Timings:  compare.Timings{Start: start, Startup: startup, Camera: cr.took, Models: modelsTook},
 	}
 	if snapshots {
-		logo := snapshot.LoadLogo(paths.Logo())
+		logo := snapshot.LoadLogo(l.Logo())
 		loop.Snapshot = func(frames []*imgproc.Gray, lines []string) {
 			img, err := snapshot.Build(frames, lines, logo)
 			if err != nil {
 				return
 			}
-			_, _ = snapshot.Save(paths.SnapshotsDir(), time.Now(), img)
+			_, _ = snapshot.Save(l.SnapshotsDir(), time.Now(), img)
 		}
 	}
 	return loop.Run()

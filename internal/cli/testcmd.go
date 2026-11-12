@@ -22,7 +22,7 @@ func (c *cmd) test() int {
 	if err != nil {
 		return c.errorf("%v", err)
 	}
-	if msg := backend.MissingData(s.Recognizer); msg != "" {
+	if msg := backend.MissingData(c.Paths, s.Recognizer); msg != "" {
 		c.say(msg)
 		return 1
 	}
@@ -38,7 +38,7 @@ func (c *cmd) test() int {
 	case err != nil:
 		return c.errorf("%v", err)
 	default:
-		known, owner, err = backend.Known(s, c.user, m)
+		known, owner, err = backend.Known(c.Paths, s, c.user, m)
 		if errors.Is(err, backend.ErrNotEnrolled) {
 			c.printf("No sface model for %s yet (run howdy add), only showing detection\n", c.user)
 		} else if err != nil {

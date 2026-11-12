@@ -9,7 +9,6 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/fabcj/howdy-go/internal/paths"
 	"github.com/fabcj/howdy-go/internal/pin"
 )
 
@@ -36,8 +35,8 @@ func (c *cmd) pin() int {
 		if lock {
 			break
 		}
-		c.pinStatus("PIN", "sudo and login managers", paths.PinDir)
-		c.pinStatus("lock screen PIN", "lock screens", paths.PinUserDir)
+		c.pinStatus("PIN", "sudo and login managers", c.Paths.PinDir)
+		c.pinStatus("lock screen PIN", "lock screens", c.Paths.PinUserDir)
 		return 0
 	}
 	c.say("Please say what to do with the PIN:")
@@ -100,11 +99,11 @@ func (c *cmd) pinSet(lock bool) int {
 		if err != nil {
 			return c.errorf("%v", err)
 		}
-		err = pin.SaveUser(paths.PinUserDir, c.user, hash, uid, gid)
+		err = pin.SaveUser(c.Paths.PinUserDir, c.user, hash, uid, gid)
 		if err != nil {
 			return c.errorf("%v", err)
 		}
-	} else if err := pin.Save(paths.PinDir, c.user, hash); err != nil {
+	} else if err := pin.Save(c.Paths.PinDir, c.user, hash); err != nil {
 		return c.errorf("%v", err)
 	}
 
@@ -121,9 +120,9 @@ func (c *cmd) pinSet(lock bool) int {
 }
 
 func (c *cmd) pinClear(lock bool) int {
-	dir, remove := paths.PinDir, pin.Remove
+	dir, remove := c.Paths.PinDir, pin.Remove
 	if lock {
-		dir, remove = paths.PinUserDir, pin.RemoveUser
+		dir, remove = c.Paths.PinUserDir, pin.RemoveUser
 	}
 	if !pin.Exists(dir, c.user) {
 		return c.fail("%s has no such PIN", c.user)
