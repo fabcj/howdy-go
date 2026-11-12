@@ -5,7 +5,7 @@ package enroll
 import (
 	"errors"
 	"math"
-	"sort"
+	"slices"
 
 	"github.com/fabcj/howdy-go/internal/face"
 )
@@ -37,8 +37,8 @@ func Average(encs [][]float64) (*Result, error) {
 	for i := range encs {
 		dist[i] = face.Distance(mean, encs[i]) * 10
 	}
-	sorted := append([]float64(nil), dist...)
-	sort.Float64s(sorted)
+	sorted := slices.Clone(dist)
+	slices.Sort(sorted)
 	limit := math.Max(median(sorted)*1.5, sorted[(n-1)/2])
 
 	keep := make([]bool, n)
@@ -51,13 +51,13 @@ func Average(encs [][]float64) (*Result, error) {
 	}
 	avg := meanOf(encs, keep)
 
-	spread := []float64{}
+	spread := make([]float64, 0, used)
 	for i := range encs {
 		if keep[i] {
 			spread = append(spread, face.Distance(avg, encs[i])*10)
 		}
 	}
-	sort.Float64s(spread)
+	slices.Sort(spread)
 	return &Result{
 		Encoding: avg,
 		Used:     used,

@@ -146,7 +146,7 @@ void hd_ort_close(hd_ort *s) {
 const char *hd_ort_output0(hd_ort *s) { return s->output0; }
 
 int hd_ort_run(hd_ort *s, const int64_t *dims, int ndims, const float *data,
-               const char *const *names, int nout, float *const *outs,
+               const char *const *names, int nout, float *out,
                const size_t *caps, size_t *lens, char *err) {
   if (nout <= 0 || nout > 16 || ndims <= 0) {
     set_err(err, "bad output or dimension count");
@@ -162,7 +162,8 @@ int hd_ort_run(hd_ort *s, const int64_t *dims, int ndims, const float *data,
   }
 
   OrtValue *in = NULL;
-  OrtValue *out[16] = {0};
+  OrtValue *vals[16] = {0};
+  size_t off = 0;
   int rc = -1;
   // ONNX Runtime doesn't write to inputs, the const goes away only here
   if (failed(api->CreateTensorWithDataAsOrtValue(cpu, (void *)data, count * sizeof(float), dims,
@@ -171,7 +172,7 @@ int hd_ort_run(hd_ort *s, const int64_t *dims, int ndims, const float *data,
     return -1;
   }
   const char *input = s->input;
-  if (failed(api->Run(s->sess, NULL, &input, (const OrtValue *const *)&in, 1, names, (size_t)nout, out), err)) {
+  if (failed(api->Run(s->sess, NULL, &input, (const OrtValue *const *)&in, 1, names, (size_t)nout, vals), err)) {
     goto done;
   }
   for (int i = 0; i < nout; i++) {
@@ -179,7 +180,7 @@ int hd_ort_run(hd_ort *s, const int64_t *dims, int ndims, const float *data,
     ONNXTensorElementDataType type;
     size_t n;
     float *p;
-    if (failed(api->GetTensorTypeAndShape(out[i], &info), err)) {
+    if (failed(api->GetTensorTypeAndShape(vals[i], &info), err)) {
       goto done;
     }
     OrtStatus *st = api->GetTensorElementType(info, &type);
@@ -187,7 +188,7 @@ int hd_ort_run(hd_ort *s, const int64_t *dims, int ndims, const float *data,
       st = api->GetTensorShapeElementCount(info, &n);
     }
     api->ReleaseTensorTypeAndShapeInfo(info);
-    if (failed(st, err) || failed(api->GetTensorMutableData(out[i], (void **)&p), err)) {
+    if (failed(st, err) || failed(api->GetTensorMutableData(vals[i], (void **)&p), err)) {
       goto done;
     }
     if (type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
@@ -198,15 +199,16 @@ int hd_ort_run(hd_ort *s, const int64_t *dims, int ndims, const float *data,
       snprintf(err, HD_ORT_ERRLEN, "output %s has %zu values, room for %zu", names[i], n, caps[i]);
       goto done;
     }
-    memcpy(outs[i], p, n * sizeof(float));
+    memcpy(out + off, p, n * sizeof(float));
     lens[i] = n;
+    off += caps[i];
   }
   rc = 0;
 
 done:
   for (int i = 0; i < nout; i++) {
-    if (out[i] != NULL) {
-      api->ReleaseValue(out[i]);
+    if (vals[i] != NULL) {
+      api->ReleaseValue(vals[i]);
     }
   }
   api->ReleaseValue(in);

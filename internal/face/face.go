@@ -36,20 +36,42 @@ type Recognizer interface {
 
 // Distance is numpy.linalg.norm(a - b). It's NaN when the lengths differ,
 // which no certainty check passes.
+//
+// For 8 to 128 values, every descriptor here, numpy's pairwise summation
+// is one 8 lane loop, applied straight to the squared differences. The
+// float64 conversions keep the compiler from fusing d*d into the add,
+// which would round differently from numpy.
 func Distance(a, b []float64) float64 {
 	if len(a) != len(b) {
 		return math.NaN()
 	}
-	var buf [512]float64
-	sq := buf[:0]
-	if len(a) > len(buf) {
-		sq = make([]float64, 0, len(a))
+	n := len(a)
+	if n < 8 || n > 128 {
+		sq := make([]float64, n)
+		for i, v := range a {
+			d := v - b[i]
+			sq[i] = float64(d * d)
+		}
+		return math.Sqrt(PairwiseSum(sq))
 	}
-	for i, v := range a {
-		d := v - b[i]
-		sq = append(sq, d*d)
+	var r [8]float64
+	for j := range r {
+		d := a[j] - b[j]
+		r[j] = float64(d * d)
 	}
-	return math.Sqrt(PairwiseSum(sq))
+	i := 8
+	for ; i < n-n%8; i += 8 {
+		for j := range r {
+			d := a[i+j] - b[i+j]
+			r[j] += float64(d * d)
+		}
+	}
+	res := ((r[0] + r[1]) + (r[2] + r[3])) + ((r[4] + r[5]) + (r[6] + r[7]))
+	for ; i < n; i++ {
+		d := a[i] - b[i]
+		res += float64(d * d)
+	}
+	return math.Sqrt(res)
 }
 
 // PairwiseSum adds up v in the order numpy's pairwise summation does, so

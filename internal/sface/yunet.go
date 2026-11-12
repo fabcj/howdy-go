@@ -1,12 +1,12 @@
 package sface
 
 import (
+	"cmp"
 	"errors"
 	"math"
-	"sort"
+	"slices"
 
 	"github.com/fabcj/howdy-go/internal/imgproc"
-	"github.com/fabcj/howdy-go/internal/onnx"
 )
 
 // Detection is one row of cv::FaceDetectorYN's output
@@ -29,7 +29,7 @@ const (
 
 // detect is FaceDetectorYN::detect (objdetect/src/face_detect.cpp) on a
 // grey image used as all three channels
-func detect(s *onnx.Session, g *imgproc.Gray, score float32) ([]Detection, error) {
+func (m *Models) detect(g *imgproc.Gray, score float32) ([]Detection, error) {
 	if len(g.Pix) == 0 || len(g.Pix) != g.W*g.H {
 		return nil, errors.New("empty image")
 	}
@@ -37,7 +37,11 @@ func detect(s *onnx.Session, g *imgproc.Gray, score float32) ([]Detection, error
 	padW := ((g.W-1)/32 + 1) * 32
 	padH := ((g.H-1)/32 + 1) * 32
 	plane := padW * padH
-	blob := make([]float32, 3*plane)
+	if cap(m.blob) < 3*plane {
+		m.blob = make([]float32, 3*plane)
+	}
+	blob := m.blob[:3*plane]
+	clear(blob[:plane])
 	for y := 0; y < g.H; y++ {
 		row := g.Pix[y*g.W : (y+1)*g.W]
 		for x, v := range row {
@@ -52,7 +56,21 @@ func detect(s *onnx.Session, g *imgproc.Gray, score float32) ([]Detection, error
 		n := (padW / st) * (padH / st)
 		caps[i], caps[i+3], caps[i+6], caps[i+9] = n, n, 4*n, 10*n
 	}
-	outs, err := s.Run(blob, []int64{1, 3, int64(padH), int64(padW)}, yunetOutput, caps)
+	// The caps only change with the frame size, which they don't in a run
+	if m.detOut == nil || !slices.Equal(caps, m.detCaps) {
+		if m.detOut != nil {
+			m.detOut.Close()
+		}
+		o, err := m.det.Outputs(yunetOutput, caps)
+		if err != nil {
+			return nil, err
+		}
+		m.detOut, m.detCaps = o, caps
+	}
+	if cap(m.res) < m.detOut.Total {
+		m.res = make([]float32, m.detOut.Total)
+	}
+	outs, err := m.det.Run(blob, []int64{1, 3, int64(padH), int64(padW)}, m.detOut, m.res[:m.detOut.Total])
 	if err != nil {
 		return nil, err
 	}
@@ -118,7 +136,7 @@ func nms(found []Detection, score float32) []Detection {
 			order = append(order, i)
 		}
 	}
-	sort.SliceStable(order, func(a, b int) bool { return found[order[a]].Score > found[order[b]].Score })
+	slices.SortStableFunc(order, func(a, b int) int { return cmp.Compare(found[b].Score, found[a].Score) })
 	if len(order) > topK {
 		order = order[:topK]
 	}

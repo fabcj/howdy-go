@@ -13,6 +13,8 @@ var errNoONNX = errors.New("built without ONNX Runtime (noonnx tag)")
 
 type Session struct{}
 
+type Outputs struct{ Total int }
+
 func Open(path, sha256Hex string) (*Session, error) {
 	if _, err := readPinned(path, sha256Hex); err != nil {
 		return nil, err
@@ -22,7 +24,11 @@ func Open(path, sha256Hex string) (*Session, error) {
 
 func (s *Session) Output0() string { return "" }
 
-func (s *Session) Run([]float32, []int64, []string, []int) ([][]float32, error) {
+func (s *Session) Outputs([]string, []int) (*Outputs, error) { return nil, errNoONNX }
+
+func (o *Outputs) Close() {}
+
+func (s *Session) Run([]float32, []int64, *Outputs, []float32) ([][]float32, error) {
 	return nil, errNoONNX
 }
 

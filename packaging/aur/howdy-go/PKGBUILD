@@ -117,7 +117,7 @@ package() {
 	install -Dm644 yunet.LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE.yunet"
 	install -Dm644 sface.LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE.sface"
 	# Loads much faster than dlib's built in copy
-	"$_dir/bin/save-frontal-detector""$pkgdir/usr/share/dlib-data/frontal_face_detector.svm"
+	"$_dir/bin/save-frontal-detector" "$pkgdir/usr/share/dlib-data/frontal_face_detector.svm"
 	chmod 644 "$pkgdir/usr/share/dlib-data/frontal_face_detector.svm"
 
 	# polkit 127+ breaks howdy without this (boltgolt/howdy#1077)

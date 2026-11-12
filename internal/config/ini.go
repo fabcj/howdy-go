@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -256,7 +257,7 @@ func (f *File) Has(sec, key string) bool {
 
 // Sections lists the section names in file order
 func (f *File) Sections() []string {
-	return append([]string(nil), f.order...)
+	return slices.Clone(f.order)
 }
 
 // SectionsWithKey lists the sections that set key
@@ -278,7 +279,7 @@ func (f *File) Set(sec, key, val string) ([]byte, error) {
 		return nil, errors.New("values can't contain line breaks")
 	}
 	key = strings.ToLower(key)
-	lines := append([]string(nil), f.lines...)
+	lines := slices.Clone(f.lines)
 	newLine := key + " = " + val
 
 	if v, ok := f.lookup(sec, key); ok {
@@ -286,10 +287,7 @@ func (f *File) Set(sec, key, val string) ([]byte, error) {
 		if strings.HasSuffix(lines[v.line], "\r") {
 			cr = "\r"
 		}
-		out := append([]string(nil), lines[:v.line]...)
-		out = append(out, newLine+cr)
-		out = append(out, lines[v.last+1:]...)
-		lines = out
+		lines = slices.Replace(lines, v.line, v.last+1, newLine+cr)
 	} else {
 		s, ok := f.sections[sec]
 		if !ok {
@@ -301,10 +299,7 @@ func (f *File) Set(sec, key, val string) ([]byte, error) {
 				at = l
 			}
 		}
-		out := append([]string(nil), lines[:at+1]...)
-		out = append(out, newLine)
-		out = append(out, lines[at+1:]...)
-		lines = out
+		lines = slices.Insert(lines, at+1, newLine)
 	}
 
 	data := []byte(strings.Join(lines, "\n"))

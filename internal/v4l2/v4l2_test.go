@@ -3,6 +3,7 @@ package v4l2
 import (
 	"bytes"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -86,7 +87,7 @@ func (d *fakeDevice) Ioctl(req uint32, arg unsafe.Pointer) error {
 		f.Pix = pixFormat{Width: uint32(d.width), Height: uint32(d.height), Pixelformat: d.formats[0]}
 	case vidiocSFmt:
 		f := (*format)(arg)
-		if contains(d.formats, f.Pix.Pixelformat) {
+		if slices.Contains(d.formats, f.Pix.Pixelformat) {
 			d.format = f.Pix.Pixelformat
 		}
 		f.Pix.Pixelformat = d.format

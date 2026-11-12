@@ -22,10 +22,14 @@ import (
 // 0.66 (tools/face-eval.py)
 const ScoreThreshold = 0.85
 
-// Models holds the two loaded models
+// Models holds the two loaded models and the buffers one frame needs,
+// kept between frames: a YuNet blob is near 3 MB, and Detect and Encode
+// are called from one goroutine at a time
 type Models struct {
-	det, rec *onnx.Session
-	recOut   string
+	det, rec       *onnx.Session
+	detOut, recOut *onnx.Outputs
+	detCaps        []int
+	blob, res      []float32
 }
 
 // Load loads YuNet and SFace from dir, checking their hashes first
@@ -39,18 +43,29 @@ func Load(dir string) (*Models, error) {
 		det.Close()
 		return nil, err
 	}
-	return &Models{det: det, rec: rec, recOut: rec.Output0()}, nil
+	m := &Models{det: det, rec: rec}
+	if m.recOut, err = rec.Outputs([]string{rec.Output0()}, []int{backend.SFaceSize}); err != nil {
+		m.Close()
+		return nil, err
+	}
+	return m, nil
 }
 
 // Close frees the models
 func (m *Models) Close() {
 	m.det.Close()
 	m.rec.Close()
+	if m.detOut != nil {
+		m.detOut.Close()
+	}
+	if m.recOut != nil {
+		m.recOut.Close()
+	}
 }
 
 // Detect finds faces in a grey image, best score first
 func (m *Models) Detect(g *imgproc.Gray) ([]face.Rect, error) {
-	found, err := detect(m.det, g, ScoreThreshold)
+	found, err := m.detect(g, ScoreThreshold)
 	if err != nil {
 		return nil, err
 	}
@@ -94,14 +109,20 @@ func Align(g *imgproc.Gray, points [5][2]float32) *imgproc.Gray {
 // feature is FaceRecognizerSF::feature: the crop as 0-255 floats, the same
 // in all three channels, so swapping red and blue changes nothing
 func (m *Models) feature(crop *imgproc.Gray) ([]float32, error) {
-	plane := 112 * 112
-	blob := make([]float32, 3*plane)
+	const plane = 112 * 112
+	if cap(m.blob) < 3*plane {
+		m.blob = make([]float32, 3*plane)
+	}
+	blob := m.blob[:3*plane]
 	for i, v := range crop.Pix {
 		blob[i] = float32(v)
 	}
 	copy(blob[plane:], blob[:plane])
 	copy(blob[2*plane:], blob[:plane])
-	out, err := m.rec.Run(blob, []int64{1, 3, 112, 112}, []string{m.recOut}, []int{backend.SFaceSize})
+	if cap(m.res) < m.recOut.Total {
+		m.res = make([]float32, m.recOut.Total)
+	}
+	out, err := m.rec.Run(blob, []int64{1, 3, 112, 112}, m.recOut, m.res[:m.recOut.Total])
 	if err != nil {
 		return nil, err
 	}

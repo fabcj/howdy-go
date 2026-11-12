@@ -55,7 +55,7 @@ func Limits(budget uint64, cpuSeconds uint64) error {
 
 // vmSize reads VmSize out of /proc/self/status, in bytes
 func vmSize(status []byte) (uint64, error) {
-	for _, line := range strings.Split(string(status), "\n") {
+	for line := range strings.Lines(string(status)) {
 		rest, ok := strings.CutPrefix(line, "VmSize:")
 		if !ok {
 			continue
@@ -158,7 +158,7 @@ func Verify(uid, gid int) error {
 			continue
 		}
 		seen := 0
-		for _, line := range strings.Split(string(data), "\n") {
+		for line := range strings.Lines(string(data)) {
 			k, v, ok := strings.Cut(line, ":")
 			if !ok {
 				continue

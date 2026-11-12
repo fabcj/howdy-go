@@ -18,11 +18,12 @@ enum { HD_ORT_ERRLEN = 256 };
 hd_ort *hd_ort_open(const void *model, size_t len, char *err);
 void hd_ort_close(hd_ort *s);
 
-// Runs the model on one float tensor of shape dims[ndims] and copies each
-// named output into outs[i], which holds caps[i] floats. lens[i] gets how
-// many it has. Returns 0, or -1 with a message in err.
+// Runs the model on one float tensor of shape dims[ndims] and copies the
+// named outputs one after another into out, output i at the sum of the
+// caps before it, with room for caps[i] floats. lens[i] gets how many it
+// has. Returns 0, or -1 with a message in err.
 int hd_ort_run(hd_ort *s, const int64_t *dims, int ndims, const float *data,
-               const char *const *names, int nout, float *const *outs,
+               const char *const *names, int nout, float *out,
                const size_t *caps, size_t *lens, char *err);
 
 // Name of the first output, which stays valid until hd_ort_close

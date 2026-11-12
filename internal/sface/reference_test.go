@@ -50,7 +50,11 @@ func TestMatchesOpenCV(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := &Models{det: det, rec: rec, recOut: rec.Output0()}
+	recOut, err := rec.Outputs([]string{rec.Output0()}, []int{backend.SFaceSize})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := &Models{det: det, rec: rec, recOut: recOut}
 	defer m.Close()
 
 	var worstBox, worstScore, worstCos float64 = 0, 0, 1
@@ -68,7 +72,7 @@ func TestMatchesOpenCV(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		found, err := detect(det, imgproc.CLAHE(g, 2.0, 8, 8), score)
+		found, err := m.detect(imgproc.CLAHE(g, 2.0, 8, 8), score)
 		if err != nil {
 			t.Fatal(err)
 		}

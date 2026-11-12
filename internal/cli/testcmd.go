@@ -3,7 +3,7 @@ package cli
 import (
 	"errors"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -178,8 +178,8 @@ func (st *testStats) report(c *cmd, took time.Duration, s *config.Settings) {
 	if len(st.dists) == 0 {
 		return
 	}
-	d := append([]float64(nil), st.dists...)
-	sort.Float64s(d)
+	d := slices.Clone(st.dists)
+	slices.Sort(d)
 	median := d[len(d)/2]
 	if len(d)%2 == 0 {
 		median = (d[len(d)/2-1] + d[len(d)/2]) / 2
