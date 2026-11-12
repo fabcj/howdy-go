@@ -61,11 +61,13 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
@@ -199,11 +201,10 @@ func writeOwned(path, data string, uid, gid int) error {
 	if err := unix.Unlink(tmp); err != nil && !errors.Is(err, unix.ENOENT) {
 		return &fs.PathError{Op: "unlink", Path: tmp, Err: err}
 	}
-	fd, err := unix.Open(tmp, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0o600)
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL|unix.O_NOFOLLOW, 0o600)
 	if err != nil {
-		return &fs.PathError{Op: "open", Path: tmp, Err: err}
+		return err
 	}
-	f := os.NewFile(uintptr(fd), tmp)
 	ok := false
 	defer func() {
 		if !ok {
@@ -212,11 +213,11 @@ func writeOwned(path, data string, uid, gid int) error {
 		}
 	}()
 	if unix.Geteuid() == 0 {
-		if err := unix.Fchown(fd, uid, gid); err != nil {
+		if err := f.Chown(uid, gid); err != nil {
 			return err
 		}
 	}
-	if err := unix.Fchmod(fd, 0o600); err != nil {
+	if err := f.Chmod(0o600); err != nil {
 		return err
 	}
 	if _, err := f.WriteString(data); err != nil {
@@ -316,23 +317,22 @@ func Load(dir, user string, owner int) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
+	f, err := os.OpenFile(path, os.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
 	if err != nil {
-		return "", &fs.PathError{Op: "open", Path: path, Err: err}
-	}
-	f := os.NewFile(uintptr(fd), path)
-	defer f.Close()
-	var st unix.Stat_t
-	if err := unix.Fstat(fd, &st); err != nil {
 		return "", err
 	}
-	if st.Mode&unix.S_IFMT != unix.S_IFREG || int(st.Uid) != owner || st.Mode&0o077 != 0 {
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return "", err
+	}
+	st := fi.Sys().(*syscall.Stat_t)
+	if !fi.Mode().IsRegular() || int(st.Uid) != owner || fi.Mode().Perm()&0o077 != 0 {
 		return "", fmt.Errorf("%s must be a regular file owned by uid %d that only it can access", path, owner)
 	}
-	buf := make([]byte, 1024)
-	n, err := f.Read(buf)
+	data, err := io.ReadAll(io.LimitReader(f, 1024))
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimSpace(string(buf[:n])), nil
+	return strings.TrimSpace(string(data)), nil
 }

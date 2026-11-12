@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -235,19 +236,11 @@ func (c *cmd) list() int {
 	}
 	for _, e := range m.Entries {
 		id := model.Str(e.Values["id"])
-		c.printf("%s", id)
 		if c.a.plain {
-			c.printf(",")
+			c.printf("%s,%s,%s\n", id, localTime(e.Values["time"]), model.Label(e))
 		} else {
-			c.printf("%s", strings.Repeat(" ", max(0, 4-len(id))))
+			c.printf("%-4s%s  %s\n", id, localTime(e.Values["time"]), model.Label(e))
 		}
-		c.printf("%s", localTime(e.Values["time"]))
-		if c.a.plain {
-			c.printf(",")
-		} else {
-			c.printf("  ")
-		}
-		c.say(model.Label(e))
 	}
 	c.say()
 	return 0
@@ -342,13 +335,7 @@ func (c *cmd) remove() int {
 	}
 
 	id := c.a.arguments[0]
-	found := -1
-	for i, e := range m.Entries {
-		if model.Str(e.Values["id"]) == id {
-			found = i
-			break
-		}
-	}
+	found := slices.IndexFunc(m.Entries, func(e *model.Object) bool { return model.Str(e.Values["id"]) == id })
 	if found >= 0 && !c.a.yes {
 		if !c.confirm(fmt.Sprintf("This will remove the model called \"%s\" for %s", model.Label(m.Entries[found]), c.user)) {
 			return 1
@@ -369,13 +356,7 @@ func (c *cmd) remove() int {
 		c.say("Removed last model, howdy disabled for user")
 		return 0
 	}
-	var rest []*model.Object
-	for _, e := range m.Entries {
-		if model.Str(e.Values["id"]) != id {
-			rest = append(rest, e)
-		}
-	}
-	m.Entries = rest
+	m.Entries = slices.Delete(m.Entries, found, found+1)
 	if err := c.save(m); err != nil {
 		return c.errorf("%v", err)
 	}
@@ -512,11 +493,10 @@ func writeConfig(path string, data []byte) error {
 	}
 	tmp := path + ".tmp"
 	_ = unix.Unlink(tmp)
-	fd, err := unix.Open(tmp, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0o600)
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL|unix.O_NOFOLLOW, 0o600)
 	if err != nil {
-		return &fs.PathError{Op: "open", Path: tmp, Err: err}
+		return err
 	}
-	f := os.NewFile(uintptr(fd), tmp)
 	ok := false
 	defer func() {
 		if !ok {
@@ -525,11 +505,11 @@ func writeConfig(path string, data []byte) error {
 		}
 	}()
 	if unix.Geteuid() == 0 {
-		if err := unix.Fchown(fd, int(st.Uid), int(st.Gid)); err != nil {
+		if err := f.Chown(int(st.Uid), int(st.Gid)); err != nil {
 			return err
 		}
 	}
-	if err := unix.Fchmod(fd, st.Mode&0o7777); err != nil {
+	if err := f.Chmod(os.FileMode(st.Mode & 0o7777)); err != nil {
 		return err
 	}
 	if _, err := f.Write(data); err != nil {
@@ -888,7 +868,7 @@ func truncateRunes(s string, n int) string {
 	return string(r[:n])
 }
 
-// UserGID looks a user's primary group up
+// UserUID looks a user's id up
 func UserUID(name string) (int, error) {
 	u, err := user.Lookup(name)
 	if err != nil {
@@ -897,6 +877,7 @@ func UserUID(name string) (int, error) {
 	return strconv.Atoi(u.Uid)
 }
 
+// UserGID looks a user's primary group up
 func UserGID(name string) (int, error) {
 	u, err := user.Lookup(name)
 	if err != nil {

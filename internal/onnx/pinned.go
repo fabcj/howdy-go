@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 
 	"golang.org/x/sys/unix"
@@ -22,23 +21,22 @@ func readPinned(path, sha256Hex string) ([]byte, error) {
 	if err != nil || len(want) != sha256.Size {
 		return nil, errors.New("onnx: bad pinned hash for " + path)
 	}
-	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
+	f, err := os.OpenFile(path, os.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
 	if err != nil {
-		return nil, &fs.PathError{Op: "open", Path: path, Err: err}
-	}
-	f := os.NewFile(uintptr(fd), path)
-	defer f.Close()
-	var st unix.Stat_t
-	if err := unix.Fstat(fd, &st); err != nil {
 		return nil, err
 	}
-	if st.Mode&unix.S_IFMT != unix.S_IFREG {
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !fi.Mode().IsRegular() {
 		return nil, fmt.Errorf("%s isn't a regular file", path)
 	}
-	if st.Size <= 0 || st.Size > maxModelSize {
+	if fi.Size() <= 0 || fi.Size() > maxModelSize {
 		return nil, fmt.Errorf("%s has the wrong size", path)
 	}
-	data := make([]byte, st.Size)
+	data := make([]byte, fi.Size())
 	if _, err := io.ReadFull(f, data); err != nil {
 		return nil, err
 	}

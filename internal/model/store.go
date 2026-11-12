@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"syscall"
 
 	"golang.org/x/sys/unix"
 )
@@ -40,38 +41,37 @@ func Load(dir, user string, owner int) (*Models, error) {
 	return LoadSize(dir, user, owner, EncodingSize)
 }
 
-// LoadSize is Load for encodings of another length than dlib's
+// LoadSize is Load for encodings of another length than dlib's. The file
+// is opened relative to the directory that was checked, so the checks and
+// the read are on the same objects.
 func LoadSize(dir, user string, owner, size int) (*Models, error) {
 	path, err := Path(dir, user)
 	if err != nil {
 		return nil, err
 	}
-	if err := checkOwned(dir, owner, true); err != nil {
+	d, err := os.OpenFile(dir, os.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW, 0)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, ErrNoModel
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer d.Close()
+	if err := checkOwned(d, owner); err != nil {
 		return nil, err
 	}
 
-	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
+	fd, err := unix.Openat(int(d.Fd()), filepath.Base(path), unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
 	if errors.Is(err, unix.ENOENT) {
 		return nil, ErrNoModel
 	}
 	if err != nil {
-		return nil, &fs.PathError{Op: "open", Path: path, Err: err}
+		return nil, &fs.PathError{Op: "openat", Path: path, Err: err}
 	}
 	f := os.NewFile(uintptr(fd), path)
 	defer f.Close()
-
-	var st unix.Stat_t
-	if err := unix.Fstat(fd, &st); err != nil {
+	if err := checkOwned(f, owner); err != nil {
 		return nil, err
-	}
-	if st.Mode&unix.S_IFMT != unix.S_IFREG {
-		return nil, fmt.Errorf("%s isn't a regular file", path)
-	}
-	if int(st.Uid) != owner {
-		return nil, fmt.Errorf("%s isn't owned by uid %d", path, owner)
-	}
-	if st.Mode&0o022 != 0 {
-		return nil, fmt.Errorf("%s is writable by others", path)
 	}
 
 	data, err := io.ReadAll(io.LimitReader(f, maxFileSize+1))
@@ -84,23 +84,19 @@ func LoadSize(dir, user string, owner, size int) (*Models, error) {
 	return ParseSize(data, size)
 }
 
-func checkOwned(path string, owner int, dir bool) error {
-	var st unix.Stat_t
-	if err := unix.Lstat(path, &st); err != nil {
-		if errors.Is(err, unix.ENOENT) {
-			return ErrNoModel
-		}
-		return &fs.PathError{Op: "lstat", Path: path, Err: err}
+// checkOwned makes sure an open file or directory belongs to owner and
+// nobody else can write to it. It goes by what was opened, not the path.
+func checkOwned(f *os.File, owner int) error {
+	fi, err := f.Stat()
+	if err != nil {
+		return err
 	}
-	want := uint32(unix.S_IFREG)
-	if dir {
-		want = unix.S_IFDIR
+	st := fi.Sys().(*syscall.Stat_t)
+	if !fi.Mode().IsRegular() && !fi.Mode().IsDir() {
+		return fmt.Errorf("%s has the wrong file type", f.Name())
 	}
-	if st.Mode&unix.S_IFMT != want {
-		return fmt.Errorf("%s has the wrong file type", path)
-	}
-	if int(st.Uid) != owner || st.Mode&0o022 != 0 {
-		return fmt.Errorf("%s must be owned by uid %d and not writable by others", path, owner)
+	if int(st.Uid) != owner || fi.Mode().Perm()&0o022 != 0 {
+		return fmt.Errorf("%s must be owned by uid %d and not writable by others", f.Name(), owner)
 	}
 	return nil
 }
@@ -122,11 +118,10 @@ func Save(dir, user string, gid int, m *Models) error {
 		return &fs.PathError{Op: "unlink", Path: tmp, Err: err}
 	}
 
-	fd, err := unix.Open(tmp, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0o640)
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL|unix.O_NOFOLLOW, 0o640)
 	if err != nil {
-		return &fs.PathError{Op: "open", Path: tmp, Err: err}
+		return err
 	}
-	f := os.NewFile(uintptr(fd), tmp)
 	ok := false
 	defer func() {
 		if !ok {
@@ -136,12 +131,12 @@ func Save(dir, user string, gid int, m *Models) error {
 	}()
 
 	if unix.Geteuid() == 0 {
-		if err := unix.Fchown(fd, 0, gid); err != nil {
+		if err := f.Chown(0, gid); err != nil {
 			return err
 		}
 	}
 	// The umask may have taken bits away, never more than 0640 though
-	if err := unix.Fchmod(fd, 0o640); err != nil {
+	if err := f.Chmod(0o640); err != nil {
 		return err
 	}
 	if _, err := f.Write(data); err != nil {

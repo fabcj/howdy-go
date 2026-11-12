@@ -7,7 +7,7 @@
 # Only committed changes get built.
 
 pkgname=howdy-go-git
-pkgver=r5.9d40671
+pkgver=r5.7ad0e1b
 pkgrel=1
 pkgdesc="Windows Hello style facial authentication for Linux, with the compare step in Go (local build)"
 arch=('x86_64')
