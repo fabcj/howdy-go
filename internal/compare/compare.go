@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/fabcj/howdy-go/internal/config"
@@ -54,7 +55,8 @@ type Loop struct {
 	Labels   []string    // label of each model
 	Camera   Camera
 	Faces    face.Recognizer
-	Out      io.Writer // stdout, where compare.py prints
+	Match    face.Matcher // backend.MatcherFor(Settings)
+	Out      io.Writer    // stdout, where compare.py prints
 	Timings  Timings
 
 	// Snapshot gets the first frames and the text lines. nil when snapshots
@@ -77,16 +79,6 @@ type state struct {
 	loopStart                time.Time
 }
 
-// Threshold is the distance a face has to be under to match: certainty/10
-// for dlib, and for sface the distance between unit vectors at
-// match_threshold's cosine similarity
-func Threshold(s *config.Settings) float64 {
-	if s.Recognizer == "sface" {
-		return face.CosineDistance(s.MatchThreshold)
-	}
-	return s.Certainty / 10
-}
-
 // Run scans frames until a match, the timeout or a camera failure, and
 // returns the exit code
 func (l *Loop) Run() int {
@@ -96,7 +88,7 @@ func (l *Loop) Run() int {
 		now = time.Now
 	}
 	st := state{lowest: 10, lastMatch: -1}
-	certainty := Threshold(s)
+	certainty := l.Match.Threshold
 	timeout := time.Duration(s.Timeout) * time.Second
 	wantSnaps := l.Snapshot != nil && (s.SaveFailed || s.SaveSuccessful)
 
@@ -269,11 +261,7 @@ func (l *Loop) report(st *state, total, searching time.Duration, nativeW, native
 	fmt.Fprintf(w, "\nFrames searched: %d (%.2f fps)\n", st.frames, float64(st.frames)/searching.Seconds())
 	fmt.Fprintf(w, "Black frames ignored: %d \n", st.blackTries)
 	fmt.Fprintf(w, "Dark frames ignored: %d \n", st.darkTries)
-	if l.Settings.Recognizer == "sface" {
-		fmt.Fprintf(w, "Similarity of winning frame: %.3f\n", face.Cosine(match))
-	} else {
-		fmt.Fprintf(w, "Certainty of winning frame: %.3f\n", match*10)
-	}
+	fmt.Fprintf(w, "%s of winning frame: %.3f\n", l.Match.Unit, l.Match.Shown(match))
 	if l.Settings.RequiredMatches > 1 {
 		fmt.Fprintf(w, "Frames that matched: %d\n", st.matchedFrames)
 	}
@@ -297,15 +285,10 @@ func (l *Loop) snapshot(st *state, kind string, now func() time.Time) {
 	}
 	t := now()
 	elapsed := t.Sub(st.loopStart).Seconds()
-	best := "100"
-	bestLine := "Best certainty value: "
-	if l.Settings.Recognizer == "sface" {
-		best, bestLine = "none", "Best similarity value: "
-		if st.sawFace {
-			best = pyfmt.Float(pyfmt.Round(face.Cosine(st.lowest), 2))
-		}
-	} else if st.sawFace {
-		best = pyfmt.Float(pyfmt.Round(st.lowest*10, 1))
+	best := l.Match.NoFace
+	bestLine := "Best " + strings.ToLower(l.Match.Unit) + " value: "
+	if st.sawFace {
+		best = pyfmt.Float(pyfmt.Round(l.Match.Shown(st.lowest), l.Match.Digits))
 	}
 	fps := "0.0"
 	if elapsed > 0 {

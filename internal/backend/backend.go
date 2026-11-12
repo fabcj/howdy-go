@@ -1,7 +1,7 @@
 // Package backend is what compare and the CLI need to know about the face
-// recognisers without loading one: the sface model files, how its stored
-// descriptors are tagged, and which stored encodings go with the
-// recogniser config.ini asks for. Loading lives in backend/loader, so
+// recognisers without loading one: whether their files are installed,
+// which stored encodings go with the recogniser config.ini asks for, and
+// how a distance is judged and shown. Loading lives in backend/loader, so
 // this package needs no cgo.
 package backend
 
@@ -12,30 +12,23 @@ import (
 	"path/filepath"
 
 	"github.com/fabcj/howdy-go/internal/config"
+	"github.com/fabcj/howdy-go/internal/face"
 	"github.com/fabcj/howdy-go/internal/model"
 	"github.com/fabcj/howdy-go/internal/paths"
+	"github.com/fabcj/howdy-go/internal/sface/spec"
 )
 
-// The sface model files and what they must hash to (OpenCV Zoo's git-LFS ids)
-const (
-	YuNetFile   = "face_detection_yunet_2026may.onnx"
-	YuNetSHA256 = "ebafce4e3c118d6554634be5c27ab333b4c047a9a8c3faf1d7cf93101c22f0f0"
-	SFaceFile   = "face_recognition_sface_2021dec.onnx"
-	SFaceSHA256 = "0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79"
-)
-
-// SFaceEncoder tags every stored sface descriptor, so they're never
-// compared with another model's
-const SFaceEncoder = "sface-2021dec"
-
-// SFaceSize is how many numbers an sface descriptor has
-const SFaceSize = 128
+// NoDeviceText is printed when device_path doesn't exist, by compare and
+// the CLI alike
+const NoDeviceText = "Howdy could not find a camera device at the path specified in the config file.\n" +
+	"It is very likely that the path is not configured correctly, please edit the 'device_path' config value by running:\n" +
+	"\n\tsudo howdy config\n"
 
 // MissingData says what to do when the named recogniser's model files
 // aren't installed, or "" when they are
-func MissingData(name string) string {
-	if name == "sface" {
-		for _, f := range []string{YuNetFile, SFaceFile} {
+func MissingData(name config.Recognizer) string {
+	if name == config.SFace {
+		for _, f := range []string{spec.YuNetFile, spec.SFaceFile} {
 			if _, err := os.Stat(filepath.Join(paths.ONNXDir, f)); err != nil {
 				return fmt.Sprintf("The sface models are missing from %s, reinstall howdy-go or set recognizer = dlib", paths.ONNXDir)
 			}
@@ -49,6 +42,28 @@ func MissingData(name string) string {
 	return ""
 }
 
+// MatcherFor is how compare judges and prints a distance with the
+// configured recogniser: certainty for dlib, and for sface the distance
+// between unit vectors at match_threshold's cosine similarity
+func MatcherFor(s *config.Settings) face.Matcher {
+	if s.Recognizer == config.SFace {
+		return face.Matcher{
+			Threshold: face.CosineDistance(s.MatchThreshold),
+			Unit:      "Similarity",
+			Shown:     face.Cosine,
+			NoFace:    "none",
+			Digits:    2,
+		}
+	}
+	return face.Matcher{
+		Threshold: s.Certainty / 10,
+		Unit:      "Certainty",
+		Shown:     func(d float64) float64 { return d * 10 },
+		NoFace:    "100",
+		Digits:    1,
+	}
+}
+
 // ErrNotEnrolled means the user has dlib models but nothing for the
 // configured recogniser
 var ErrNotEnrolled = errors.New("no sface model, run howdy add again")
@@ -57,18 +72,18 @@ var ErrNotEnrolled = errors.New("no sface model, run howdy add again")
 // is the user's .dat file, which decides which models exist; owner indexes
 // its entries.
 func Known(s *config.Settings, user string, dat *model.Models) (known [][]float64, owner []int, err error) {
-	if s.Recognizer != "sface" {
+	if s.Recognizer != config.SFace {
 		known, owner = dat.Flat()
 		return known, owner, nil
 	}
-	m, err := model.LoadSize(paths.SFaceModelsDir, user, paths.ModelOwnerUID(), SFaceSize)
+	m, err := model.LoadSize(paths.SFaceModelsDir, user, paths.ModelOwnerUID(), spec.Size)
 	if errors.Is(err, model.ErrNoModel) {
 		return nil, nil, ErrNotEnrolled
 	}
 	if err != nil {
 		return nil, nil, err
 	}
-	known, owner = m.Enrolled(dat, SFaceEncoder)
+	known, owner = m.Enrolled(dat, spec.Encoder)
 	if len(known) == 0 {
 		return nil, nil, ErrNotEnrolled
 	}

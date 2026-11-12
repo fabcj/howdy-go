@@ -10,9 +10,9 @@ import (
 	"github.com/fabcj/howdy-go/internal/sface"
 )
 
-// Load loads the named recogniser: "dlib" or "sface"
-func Load(s *config.Settings, name string) (face.Recognizer, error) {
-	if name == "sface" {
+// Load loads the named recogniser
+func Load(s *config.Settings, name config.Recognizer) (face.Recognizer, error) {
+	if name == config.SFace {
 		m, err := sface.Load(paths.ONNXDir)
 		if err != nil {
 			return nil, err

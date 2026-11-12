@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fabcj/howdy-go/internal/backend"
 	"github.com/fabcj/howdy-go/internal/config"
 	"github.com/fabcj/howdy-go/internal/face"
 	"github.com/fabcj/howdy-go/internal/imgproc"
@@ -94,7 +95,7 @@ func newLoop(s *config.Settings, frames ...*imgproc.Gray) (*Loop, *fakeCamera, *
 	known[1][0] = 0.2
 	return &Loop{
 		Settings: s, Known: known, Owner: []int{0, 1}, Labels: []string{"first", "second"},
-		Camera: cam, Faces: faces, Out: out, Now: c.now,
+		Camera: cam, Faces: faces, Match: backend.MatcherFor(s), Out: out, Now: c.now,
 		Timings: Timings{Start: c.t},
 	}, cam, faces, out
 }
@@ -260,7 +261,7 @@ func TestSFaceThreshold(t *testing.T) {
 	s := settings()
 	s.Recognizer, s.MatchThreshold = "sface", 0.9
 	s.EndReport = true
-	if d := Threshold(s); math.Abs(d-math.Sqrt(0.2)) > 1e-12 {
+	if d := backend.MatcherFor(s).Threshold; math.Abs(d-math.Sqrt(0.2)) > 1e-12 {
 		t.Errorf("threshold %v", d)
 	}
 	// 0.4 from the second encoding: cosine 1 - 0.16/2 = 0.92

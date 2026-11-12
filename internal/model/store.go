@@ -7,25 +7,19 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"regexp"
 	"syscall"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/fabcj/howdy-go/internal/username"
 )
 
 // Big enough for thousands of models
 const maxFileSize = 16 << 20
 
-var userRe = regexp.MustCompile(`^[a-z_][a-z0-9_-]*[$]?$`)
-
-// ValidUser checks a username before it goes into a path
-func ValidUser(user string) bool {
-	return len(user) <= 32 && userRe.MatchString(user)
-}
-
 // Path is where a user's models live
 func Path(dir, user string) (string, error) {
-	if !ValidUser(user) {
+	if !username.Valid(user) {
 		return "", fmt.Errorf("%q isn't a valid username", user)
 	}
 	return filepath.Join(dir, user+".dat"), nil

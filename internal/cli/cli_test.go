@@ -20,6 +20,7 @@ import (
 	"github.com/fabcj/howdy-go/internal/model"
 	"github.com/fabcj/howdy-go/internal/paths"
 	"github.com/fabcj/howdy-go/internal/pin"
+	"github.com/fabcj/howdy-go/internal/sface/spec"
 )
 
 func TestParse(t *testing.T) {
@@ -125,8 +126,8 @@ func setup(t *testing.T) *testEnv {
 		Camera: func(s *config.Settings) (compare.Camera, func(), error) {
 			return &fakeCam{te: te}, func() {}, nil
 		},
-		Faces: func(s *config.Settings, name string) (face.Recognizer, error) {
-			te.loaded = append(te.loaded, name)
+		Faces: func(s *config.Settings, name config.Recognizer) (face.Recognizer, error) {
+			te.loaded = append(te.loaded, string(name))
 			return &fakeFaces{te: te}, nil
 		},
 		Edit: func(argv []string) error {
@@ -640,8 +641,8 @@ func TestAddSFace(t *testing.T) {
 		t.Fatalf("add without the ONNX files: exit %d %q", code, te.out.String())
 	}
 	os.Mkdir(paths.ONNXDir, 0o755)
-	os.WriteFile(filepath.Join(paths.ONNXDir, backend.YuNetFile), nil, 0o644)
-	os.WriteFile(filepath.Join(paths.ONNXDir, backend.SFaceFile), nil, 0o644)
+	os.WriteFile(filepath.Join(paths.ONNXDir, spec.YuNetFile), nil, 0o644)
+	os.WriteFile(filepath.Join(paths.ONNXDir, spec.SFaceFile), nil, 0o644)
 
 	te.loaded = nil
 	for i := 0; i < 2; i++ {
@@ -659,11 +660,11 @@ func TestAddSFace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sf, err := model.LoadSize(paths.SFaceModelsDir, "alice", os.Getuid(), backend.SFaceSize)
+	sf, err := model.LoadSize(paths.SFaceModelsDir, "alice", os.Getuid(), spec.Size)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if encs, owner := sf.Enrolled(dat, backend.SFaceEncoder); len(encs) != 2 || owner[0] != 0 || owner[1] != 1 {
+	if encs, owner := sf.Enrolled(dat, spec.Encoder); len(encs) != 2 || owner[0] != 0 || owner[1] != 1 {
 		t.Fatalf("sface models %v %v", encs, owner)
 	}
 	var norm float64
@@ -681,7 +682,7 @@ func TestAddSFace(t *testing.T) {
 	if code := te.run("remove", "0", "-y"); code != 0 {
 		t.Fatalf("remove: %d %q", code, te.out.String())
 	}
-	sf, _ = model.LoadSize(paths.SFaceModelsDir, "alice", os.Getuid(), backend.SFaceSize)
+	sf, _ = model.LoadSize(paths.SFaceModelsDir, "alice", os.Getuid(), spec.Size)
 	if len(sf.Entries) != 1 {
 		t.Errorf("%d sface entries after removing one of two", len(sf.Entries))
 	}
@@ -701,8 +702,8 @@ func TestSFaceOrphanNotRevived(t *testing.T) {
 	te.frames = []*imgproc.Gray{litFrame()}
 	te.faces = 1
 	os.Mkdir(paths.ONNXDir, 0o755)
-	os.WriteFile(filepath.Join(paths.ONNXDir, backend.YuNetFile), nil, 0o644)
-	os.WriteFile(filepath.Join(paths.ONNXDir, backend.SFaceFile), nil, 0o644)
+	os.WriteFile(filepath.Join(paths.ONNXDir, spec.YuNetFile), nil, 0o644)
+	os.WriteFile(filepath.Join(paths.ONNXDir, spec.SFaceFile), nil, 0o644)
 	base, _ := os.ReadFile(paths.ConfigFile())
 	use := func(name string) {
 		cfg := bytes.Replace(base, []byte("[core]\n"), []byte("[core]\nrecognizer = "+name+"\n"), 1)

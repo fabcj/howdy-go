@@ -34,6 +34,17 @@ type Recognizer interface {
 	Close()
 }
 
+// Matcher is how a loop judges a distance and describes it: dlib users
+// read a certainty, sface users a similarity. backend.MatcherFor builds one
+// from the config.
+type Matcher struct {
+	Threshold float64                    // a face matches under this distance
+	Unit      string                     // "Certainty" or "Similarity"
+	Shown     func(dist float64) float64 // what to print for a distance
+	NoFace    string                     // what to print when no face was seen
+	Digits    int                        // decimals Shown is rounded to in snapshots
+}
+
 // Distance is numpy.linalg.norm(a - b). It's NaN when the lengths differ,
 // which no certainty check passes.
 //

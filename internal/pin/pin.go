@@ -72,7 +72,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/fabcj/howdy-go/internal/model"
+	"github.com/fabcj/howdy-go/internal/username"
 )
 
 // Length is how many digits a PIN has
@@ -131,7 +131,7 @@ func Verify(pin, hash string) bool {
 
 // Path is where a user's PIN hash lives
 func Path(dir, user string) (string, error) {
-	if !model.ValidUser(user) {
+	if !username.Valid(user) {
 		return "", fmt.Errorf("%q isn't a valid username", user)
 	}
 	return filepath.Join(dir, user), nil

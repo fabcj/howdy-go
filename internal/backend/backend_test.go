@@ -9,6 +9,7 @@ import (
 	"github.com/fabcj/howdy-go/internal/config"
 	"github.com/fabcj/howdy-go/internal/model"
 	"github.com/fabcj/howdy-go/internal/paths"
+	"github.com/fabcj/howdy-go/internal/sface/spec"
 )
 
 // Synthetic descriptors only, never real face data
@@ -37,7 +38,7 @@ func dat(entries ...*model.Object) *model.Models {
 
 func saveSFace(t *testing.T, dir string, entries ...*model.Object) {
 	t.Helper()
-	m := model.NewModels(SFaceSize)
+	m := model.NewModels(spec.Size)
 	m.Entries = append(m.Entries, entries...)
 	if err := model.Save(dir, "alice", os.Getegid(), m); err != nil {
 		t.Fatal(err)
@@ -65,12 +66,12 @@ func TestKnownSFaceWithoutAFileIsNotEnrolled(t *testing.T) {
 func TestKnownSFaceFollowsTheDatFile(t *testing.T) {
 	dir := sandbox(t)
 	saveSFace(t, dir,
-		model.NewTaggedEntry(100, "a", 0, vec(SFaceSize, 1), SFaceEncoder),
-		model.NewTaggedEntry(200, "b", 1, vec(SFaceSize, 2), SFaceEncoder),
+		model.NewTaggedEntry(100, "a", 0, vec(spec.Size, 1), spec.Encoder),
+		model.NewTaggedEntry(200, "b", 1, vec(spec.Size, 2), spec.Encoder),
 		// Same id as a live model but another time: a leftover of a removed one
-		model.NewTaggedEntry(999, "stale", 1, vec(SFaceSize, 3), SFaceEncoder),
+		model.NewTaggedEntry(999, "stale", 1, vec(spec.Size, 3), spec.Encoder),
 		// Another encoder's descriptor is never compared
-		model.NewTaggedEntry(300, "c", 2, vec(SFaceSize, 4), "other-encoder"),
+		model.NewTaggedEntry(300, "c", 2, vec(spec.Size, 4), "other-encoder"),
 	)
 	d := dat(model.NewEntry(100, "a", 0, vec(model.EncodingSize, 0)),
 		model.NewEntry(200, "b", 1, vec(model.EncodingSize, 0)),
@@ -87,7 +88,7 @@ func TestKnownSFaceFollowsTheDatFile(t *testing.T) {
 
 func TestKnownSFaceWithEverythingRemovedFromTheDat(t *testing.T) {
 	dir := sandbox(t)
-	saveSFace(t, dir, model.NewTaggedEntry(100, "a", 0, vec(SFaceSize, 1), SFaceEncoder))
+	saveSFace(t, dir, model.NewTaggedEntry(100, "a", 0, vec(spec.Size, 1), spec.Encoder))
 	d := dat(model.NewEntry(555, "other", 0, vec(model.EncodingSize, 0)))
 	_, _, err := Known(&config.Settings{Recognizer: "sface"}, "alice", d)
 	if !errors.Is(err, ErrNotEnrolled) {
@@ -97,7 +98,7 @@ func TestKnownSFaceWithEverythingRemovedFromTheDat(t *testing.T) {
 
 func TestKnownSFaceRefusesAFileOthersCanWrite(t *testing.T) {
 	dir := sandbox(t)
-	saveSFace(t, dir, model.NewTaggedEntry(100, "a", 0, vec(SFaceSize, 1), SFaceEncoder))
+	saveSFace(t, dir, model.NewTaggedEntry(100, "a", 0, vec(spec.Size, 1), spec.Encoder))
 	if err := os.Chmod(dir+"/alice.dat", 0o666); err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +117,7 @@ func TestMissingData(t *testing.T) {
 	if MissingData("sface") == "" || MissingData("dlib") == "" {
 		t.Error("empty data dirs reported as complete")
 	}
-	for _, f := range []string{YuNetFile, SFaceFile} {
+	for _, f := range []string{spec.YuNetFile, spec.SFaceFile} {
 		if err := os.WriteFile(paths.ONNXDir+"/"+f, []byte("x"), 0o644); err != nil {
 			t.Fatal(err)
 		}

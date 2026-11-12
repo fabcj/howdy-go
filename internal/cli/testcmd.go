@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/fabcj/howdy-go/internal/backend"
-	"github.com/fabcj/howdy-go/internal/compare"
 	"github.com/fabcj/howdy-go/internal/config"
 	"github.com/fabcj/howdy-go/internal/face"
 	"github.com/fabcj/howdy-go/internal/imgproc"
@@ -49,15 +48,9 @@ func (c *cmd) test() int {
 			labels = append(labels, model.Label(e))
 		}
 	}
-	certainty := compare.Threshold(s)
-	sim := s.Recognizer == "sface"
-	// What's shown for a distance: certainty for dlib, similarity for sface
-	shown := func(d float64) float64 {
-		if sim {
-			return face.Cosine(d)
-		}
-		return d * 10
-	}
+	match := backend.MatcherFor(s)
+	certainty, shown := match.Threshold, match.Shown
+	sim := s.Recognizer == config.SFace
 
 	faces, err := c.Faces(s, s.Recognizer)
 	if err != nil {
@@ -187,7 +180,7 @@ func (st *testStats) report(c *cmd, took time.Duration, s *config.Settings) {
 	// A median close to the threshold means most frames miss, and each
 	// miss costs a frame of unlock time
 	close, knob := false, "raising certainty"
-	if s.Recognizer == "sface" {
+	if s.Recognizer == config.SFace {
 		knob = "lowering match_threshold"
 		c.printf("Similarity: best %.3f, median %.3f, %d of %d faces over %g\n",
 			face.Cosine(d[0]), face.Cosine(median), st.matches, len(d), s.MatchThreshold)

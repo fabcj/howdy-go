@@ -21,6 +21,7 @@ import (
 	"github.com/fabcj/howdy-go/internal/model"
 	"github.com/fabcj/howdy-go/internal/paths"
 	"github.com/fabcj/howdy-go/internal/snapshot"
+	"github.com/fabcj/howdy-go/internal/username"
 )
 
 // Generous caps that still stop a runaway. The CNN detector at upsample 1
@@ -49,7 +50,7 @@ func run() int {
 		return compare.Abort
 	}
 	user := os.Args[1]
-	if !model.ValidUser(user) {
+	if !username.Valid(user) {
 		return fail(compare.Abort, "invalid username")
 	}
 
@@ -103,9 +104,7 @@ func run() int {
 
 	if _, err := os.Stat(s.DevicePath); err != nil {
 		if s.WarnNoDevice {
-			fmt.Println("Howdy could not find a camera device at the path specified in the config file.")
-			fmt.Println("It is very likely that the path is not configured correctly, please edit the 'device_path' config value by running:")
-			fmt.Print("\n\tsudo howdy config\n\n")
+			fmt.Print(backend.NoDeviceText, "\n")
 		}
 		return compare.BadDevice
 	}
@@ -174,6 +173,7 @@ func run() int {
 		Labels:   labels,
 		Camera:   cr.cam,
 		Faces:    faces,
+		Match:    backend.MatcherFor(s),
 		Out:      os.Stdout,
 		Hostname: unix.ByteSliceToString(uts.Nodename[:]),
 		Timings:  compare.Timings{Start: start, Startup: startup, Camera: cr.took, Models: modelsTook},

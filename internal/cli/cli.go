@@ -26,7 +26,9 @@ import (
 	"github.com/fabcj/howdy-go/internal/model"
 	"github.com/fabcj/howdy-go/internal/paths"
 	"github.com/fabcj/howdy-go/internal/pyfmt"
+	"github.com/fabcj/howdy-go/internal/sface/spec"
 	"github.com/fabcj/howdy-go/internal/snapshot"
+	"github.com/fabcj/howdy-go/internal/username"
 )
 
 // Version of howdy-go, set by the PKGBUILD
@@ -50,9 +52,8 @@ type Env struct {
 
 	// Opens the camera from the settings, with a function to close it
 	Camera func(s *config.Settings) (compare.Camera, func(), error)
-	// Loads the face models
-	// Faces loads a recogniser, "dlib" or "sface"
-	Faces func(s *config.Settings, name string) (face.Recognizer, error)
+	// Faces loads a recogniser
+	Faces func(s *config.Settings, name config.Recognizer) (face.Recognizer, error)
 	// Asks for a secret without showing it, for howdy pin
 	ReadHidden func(prompt string) (string, error)
 	// Runs the editor with the config file, as argv
@@ -143,7 +144,7 @@ func Main(e *Env) int {
 
 	c := &cmd{Env: e, a: a, in: bufio.NewReader(e.Stdin), user: a.user}
 	// The user ends up in a path under the models dir, and this runs as root
-	if a.command != "version" && a.command != "config" && !model.ValidUser(a.user) {
+	if a.command != "version" && a.command != "config" && !username.Valid(a.user) {
 		return c.errorf("%q isn't a valid username", a.user)
 	}
 
@@ -292,7 +293,7 @@ func (c *cmd) removeSFace() error {
 // pruneSFace removes the sface descriptors whose model the .dat file (dat)
 // no longer has, if there are any
 func (c *cmd) pruneSFace(dat *model.Models) error {
-	m, err := model.LoadSize(paths.SFaceModelsDir, c.user, paths.ModelOwnerUID(), backend.SFaceSize)
+	m, err := model.LoadSize(paths.SFaceModelsDir, c.user, paths.ModelOwnerUID(), spec.Size)
 	if errors.Is(err, model.ErrNoModel) {
 		return nil
 	}
@@ -534,9 +535,7 @@ func writeConfig(path string, data []byte) error {
 
 func (c *cmd) noDevice(s *config.Settings) int {
 	if s.WarnNoDevice {
-		c.say("Howdy could not find a camera device at the path specified in the config file.")
-		c.say("It is very likely that the path is not configured correctly, please edit the 'device_path' config value by running:")
-		c.say("\n\tsudo howdy config\n")
+		c.say(backend.NoDeviceText)
 	}
 	return compare.BadDevice
 }
@@ -626,10 +625,8 @@ func (c *cmd) snapshot() int {
 }
 
 func (c *cmd) add() int {
-	if _, err := os.Stat(paths.ShapePredictor()); err != nil {
-		c.say("Data files have not been downloaded, please run the following commands:")
-		c.say("\n\tcd " + paths.DlibDataDir)
-		c.say("\tsudo ./install.sh\n")
+	if msg := backend.MissingData(config.Dlib); msg != "" {
+		c.say(msg)
 		return 1
 	}
 	_, s, err := c.settings()
@@ -642,14 +639,14 @@ func (c *cmd) add() int {
 	}
 	// dlib always: the .dat file it writes is what list, remove, the PAM
 	// module and Python Howdy go by, and recognizer = dlib has to keep working
-	faces, err := c.Faces(s, "dlib")
+	faces, err := c.Faces(s, config.Dlib)
 	if err != nil {
 		return c.errorf("can't load the dlib models: %v", err)
 	}
 	defer faces.Close()
 	// And the configured recogniser too, from the same frames
 	var extra face.Recognizer
-	if s.Recognizer != "dlib" {
+	if s.Recognizer != config.Dlib {
 		if msg := backend.MissingData(s.Recognizer); msg != "" {
 			c.say(msg)
 			return 1
@@ -848,15 +845,15 @@ func (c *cmd) saveSFace(dat *model.Models, created int64, label string, id int64
 			return err
 		}
 	}
-	m, err := model.LoadSize(paths.SFaceModelsDir, c.user, paths.ModelOwnerUID(), backend.SFaceSize)
+	m, err := model.LoadSize(paths.SFaceModelsDir, c.user, paths.ModelOwnerUID(), spec.Size)
 	if errors.Is(err, model.ErrNoModel) {
-		m, err = model.NewModels(backend.SFaceSize), nil
+		m, err = model.NewModels(spec.Size), nil
 	}
 	if err != nil {
 		return err
 	}
 	m.Prune(dat)
-	m.Entries = append(m.Entries, model.NewTaggedEntry(created, label, id, enc, backend.SFaceEncoder))
+	m.Entries = append(m.Entries, model.NewTaggedEntry(created, label, id, enc, spec.Encoder))
 	return model.Save(paths.SFaceModelsDir, c.user, gid, m)
 }
 

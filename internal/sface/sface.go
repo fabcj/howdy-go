@@ -11,10 +11,10 @@ import (
 	"math"
 	"path/filepath"
 
-	"github.com/fabcj/howdy-go/internal/backend"
 	"github.com/fabcj/howdy-go/internal/face"
 	"github.com/fabcj/howdy-go/internal/imgproc"
 	"github.com/fabcj/howdy-go/internal/onnx"
+	"github.com/fabcj/howdy-go/internal/sface/spec"
 )
 
 // ScoreThreshold is the least YuNet score that counts as a face. Real faces
@@ -34,17 +34,17 @@ type Models struct {
 
 // Load loads YuNet and SFace from dir, checking their hashes first
 func Load(dir string) (*Models, error) {
-	det, err := onnx.Open(filepath.Join(dir, backend.YuNetFile), backend.YuNetSHA256)
+	det, err := onnx.Open(filepath.Join(dir, spec.YuNetFile), spec.YuNetSHA256)
 	if err != nil {
 		return nil, err
 	}
-	rec, err := onnx.Open(filepath.Join(dir, backend.SFaceFile), backend.SFaceSHA256)
+	rec, err := onnx.Open(filepath.Join(dir, spec.SFaceFile), spec.SFaceSHA256)
 	if err != nil {
 		det.Close()
 		return nil, err
 	}
 	m := &Models{det: det, rec: rec}
-	if m.recOut, err = rec.Outputs([]string{rec.Output0()}, []int{backend.SFaceSize}); err != nil {
+	if m.recOut, err = rec.Outputs([]string{rec.Output0()}, []int{spec.Size}); err != nil {
 		m.Close()
 		return nil, err
 	}
@@ -126,7 +126,7 @@ func (m *Models) feature(crop *imgproc.Gray) ([]float32, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(out[0]) != backend.SFaceSize {
+	if len(out[0]) != spec.Size {
 		return nil, errors.New("SFace gave a descriptor of the wrong size")
 	}
 	return out[0], nil

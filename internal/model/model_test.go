@@ -124,19 +124,6 @@ func TestRefused(t *testing.T) {
 	}
 }
 
-func TestValidUser(t *testing.T) {
-	for _, ok := range []string{"alice", "_x", "a-b_c1", "machine$", strings.Repeat("a", 32)} {
-		if !ValidUser(ok) {
-			t.Errorf("%q refused", ok)
-		}
-	}
-	for _, bad := range []string{"", "../x", "a/b", "Root", "1a", "a b", "x.dat", strings.Repeat("a", 33), "a$b"} {
-		if ValidUser(bad) {
-			t.Errorf("%q accepted", bad)
-		}
-	}
-}
-
 func TestStore(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.Chmod(dir, 0o755); err != nil {
