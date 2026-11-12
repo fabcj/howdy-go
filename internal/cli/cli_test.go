@@ -111,13 +111,13 @@ func setup(t *testing.T) *testEnv {
 		CurrentUser: func() string { return "root" },
 		UserGID:     func(string) (int, error) { return os.Getgid(), nil },
 		UserUID:     func(string) (int, error) { return os.Getuid(), nil },
-		ReadHidden: func(prompt string) (string, error) {
+		ReadHidden: func(prompt string) ([]byte, error) {
 			if len(te.secrets) == 0 {
-				return "", errors.New("no more secrets")
+				return nil, errors.New("no more secrets")
 			}
 			s := te.secrets[0]
 			te.secrets = te.secrets[1:]
-			return s, nil
+			return []byte(s), nil
 		},
 		Camera: func(s *config.Settings) (compare.Camera, func(), error) {
 			return &fakeCam{te: te}, func() {}, nil
@@ -488,7 +488,7 @@ func TestPin(t *testing.T) {
 		t.Fatalf("pin file: %v %v", st, err)
 	}
 	hash, err := pin.Load(te.Paths.PinDir, "alice", os.Geteuid())
-	if err != nil || !pin.Verify("4821", hash) || pin.Verify("4822", hash) {
+	if err != nil || !pin.Verify([]byte("4821"), hash) || pin.Verify([]byte("4822"), hash) {
 		t.Errorf("stored hash doesn't check: %v", err)
 	}
 
@@ -563,7 +563,7 @@ func TestPinLockScreen(t *testing.T) {
 		t.Errorf("counter %q, the module can't create it so it must exist", c)
 	}
 	hash, err := pin.Load(te.Paths.PinUserDir, "alice", os.Geteuid())
-	if err != nil || !pin.Verify("4821", hash) {
+	if err != nil || !pin.Verify([]byte("4821"), hash) {
 		t.Errorf("stored hash: %v", err)
 	}
 
@@ -715,7 +715,7 @@ func TestSFaceOrphanNotRevived(t *testing.T) {
 	// Model 1 removed from the .dat file only
 	dat, _ := model.Load(te.Paths.UserModelsDir, "alice", os.Getuid())
 	dat.Entries = dat.Entries[:1]
-	if err := model.Save(te.Paths.UserModelsDir, "alice", os.Getgid(), dat); err != nil {
+	if err := model.Save(te.Paths.UserModelsDir, "alice", os.Getuid(), dat); err != nil {
 		t.Fatal(err)
 	}
 	te.clock = te.clock.Add(time.Hour)

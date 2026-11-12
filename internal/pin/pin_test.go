@@ -12,43 +12,43 @@ func TestValid(t *testing.T) {
 		"1234": true, "0000": true, "": false, "123": false, "12345": false,
 		"12a4": false, "١٢٣٤": false, " 123": false, "12 4": false,
 	} {
-		if Valid(s) != want {
+		if Valid([]byte(s)) != want {
 			t.Errorf("Valid(%q) = %v", s, !want)
 		}
 	}
 }
 
 func TestHashVerify(t *testing.T) {
-	h, err := Hash("4821")
+	h, err := Hash([]byte("4821"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.HasPrefix(h, "$y$") || strings.Contains(h, "4821") {
 		t.Fatalf("hash %q", h)
 	}
-	if !Verify("4821", h) {
+	if !Verify([]byte("4821"), h) {
 		t.Error("right PIN refused")
 	}
 	for _, bad := range []string{"4822", "0000", "", "48210", "4821 "} {
-		if Verify(bad, h) {
+		if Verify([]byte(bad), h) {
 			t.Errorf("accepted %q", bad)
 		}
 	}
-	h2, _ := Hash("4821")
+	h2, _ := Hash([]byte("4821"))
 	if h == h2 {
 		t.Error("two hashes of one PIN are equal, so the salt isn't random")
 	}
-	if Verify("4821", "") || Verify("4821", "$5$salt$nothing") || Verify("4821", "*0") {
+	if Verify([]byte("4821"), "") || Verify([]byte("4821"), "$5$salt$nothing") || Verify([]byte("4821"), "*0") {
 		t.Error("accepted a hash that isn't yescrypt")
 	}
-	if _, err := Hash("abcd"); err == nil {
+	if _, err := Hash([]byte("abcd")); err == nil {
 		t.Error("hashed something that isn't a PIN")
 	}
 }
 
 func TestSaveLoad(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "pin")
-	h, _ := Hash("1357")
+	h, _ := Hash([]byte("1357"))
 	if Exists(dir, "alice") {
 		t.Fatal("exists before saving")
 	}
@@ -67,7 +67,7 @@ func TestSaveLoad(t *testing.T) {
 		t.Fatalf("Load = %q, %v", got, err)
 	}
 	// Replacing it leaves no temporary file behind
-	h2, _ := Hash("2468")
+	h2, _ := Hash([]byte("2468"))
 	if err := Save(dir, "alice", h2); err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func TestSaveLoad(t *testing.T) {
 
 func TestFails(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "pin")
-	h, _ := Hash("1357")
+	h, _ := Hash([]byte("1357"))
 	if err := Save(dir, "alice", h); err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +146,7 @@ func TestFails(t *testing.T) {
 
 func TestSaveUser(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "pin-user")
-	h, _ := Hash("2468")
+	h, _ := Hash([]byte("2468"))
 	uid, gid := os.Geteuid(), os.Getegid()
 	if err := SaveUser(dir, "alice", h, uid, gid); err != nil {
 		t.Fatal(err)

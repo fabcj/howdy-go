@@ -1,6 +1,7 @@
 package model
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -95,10 +96,47 @@ func checkOwned(f *os.File, owner int) error {
 	return nil
 }
 
-// Save writes the models readable by root and the user's group only. The
-// group needs to read it because lock screens run compare as the user. It
-// goes to a temporary file first so a crash can't leave half a model.
-func Save(dir, user string, gid int, m *Models) error {
+// userReadACL is a system.posix_acl_access value: the owner reads and
+// writes, uid reads, the owning group and everyone else get nothing. The
+// group bits of the mode then show the mask, r--, which is what a plain
+// 0640 file shows too.
+func userReadACL(uid int) []byte {
+	const (
+		version       = 2
+		tagUserObj    = 1
+		tagUser       = 2
+		tagGroupObj   = 4
+		tagMask       = 0x10
+		tagOther      = 0x20
+		undefinedID   = 0xffffffff
+		permRead      = 4
+		permReadWrite = 6
+	)
+	type entry struct {
+		tag, perm uint16
+		id        uint32
+	}
+	b := binary.LittleEndian.AppendUint32(nil, version)
+	for _, e := range []entry{
+		{tagUserObj, permReadWrite, undefinedID},
+		{tagUser, permRead, uint32(uid)},
+		{tagGroupObj, 0, undefinedID},
+		{tagMask, permRead, undefinedID},
+		{tagOther, 0, undefinedID},
+	} {
+		b = binary.LittleEndian.AppendUint16(b, e.tag)
+		b = binary.LittleEndian.AppendUint16(b, e.perm)
+		b = binary.LittleEndian.AppendUint32(b, e.id)
+	}
+	return b
+}
+
+// Save writes the models readable by root and by uid only, through an
+// access control list. uid needs to read it because lock screens run
+// compare as the user; the user's group doesn't, and on systems where every
+// account shares one primary group it must not. It goes to a temporary file
+// first so a crash can't leave half a model.
+func Save(dir, user string, uid int, m *Models) error {
 	path, err := Path(dir, user)
 	if err != nil {
 		return err
@@ -125,13 +163,17 @@ func Save(dir, user string, gid int, m *Models) error {
 	}()
 
 	if unix.Geteuid() == 0 {
-		if err := f.Chown(0, gid); err != nil {
+		if err := f.Chown(0, 0); err != nil {
 			return err
 		}
 	}
-	// The umask may have taken bits away, never more than 0640 though
-	if err := f.Chmod(0o640); err != nil {
+	if err := f.Chmod(0o600); err != nil {
 		return err
+	}
+	// A filesystem without ACLs leaves a file only root can read, which is
+	// the password prompt, not a model other people can read
+	if err := unix.Fsetxattr(int(f.Fd()), "system.posix_acl_access", userReadACL(uid), 0); err != nil {
+		return fmt.Errorf("%s: can't give uid %d read access: %w", tmp, uid, err)
 	}
 	if _, err := f.Write(data); err != nil {
 		return err

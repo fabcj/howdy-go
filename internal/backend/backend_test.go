@@ -34,7 +34,7 @@ func saveSFace(t *testing.T, dir string, entries ...*model.Object) {
 	t.Helper()
 	m := model.NewModels(spec.Size)
 	m.Entries = append(m.Entries, entries...)
-	if err := model.Save(dir, "alice", os.Getegid(), m); err != nil {
+	if err := model.Save(dir, "alice", os.Geteuid(), m); err != nil {
 		t.Fatal(err)
 	}
 }

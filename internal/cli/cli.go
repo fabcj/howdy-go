@@ -56,7 +56,7 @@ type Env struct {
 	// Faces loads a recogniser
 	Faces func(s *config.Settings, name config.Recognizer) (face.Recognizer, error)
 	// Asks for a secret without showing it, for howdy pin
-	ReadHidden func(prompt string) (string, error)
+	ReadHidden func(prompt string) ([]byte, error)
 	// Runs the editor with the config file, as argv
 	Edit     func(argv []string) error
 	LookPath func(string) (string, error)
@@ -305,11 +305,11 @@ func (c *cmd) pruneSFace(dat *model.Models) error {
 	if len(m.Entries) == 0 {
 		return c.removeSFace()
 	}
-	gid, err := c.UserGID(c.user)
+	uid, err := c.UserUID(c.user)
 	if err != nil {
 		return err
 	}
-	return model.Save(c.Paths.SFaceModelsDir, c.user, gid, m)
+	return model.Save(c.Paths.SFaceModelsDir, c.user, uid, m)
 }
 
 func (c *cmd) remove() int {
@@ -370,11 +370,11 @@ func (c *cmd) remove() int {
 }
 
 func (c *cmd) save(m *model.Models) error {
-	gid, err := c.UserGID(c.user)
+	uid, err := c.UserUID(c.user)
 	if err != nil {
 		return err
 	}
-	return model.Save(c.Paths.UserModelsDir, c.user, gid, m)
+	return model.Save(c.Paths.UserModelsDir, c.user, uid, m)
 }
 
 func (c *cmd) config() int {
@@ -634,7 +634,7 @@ func (c *cmd) add() int {
 	if err != nil {
 		return c.errorf("%v", err)
 	}
-	gid, err := c.UserGID(c.user)
+	uid, err := c.UserUID(c.user)
 	if err != nil {
 		return c.errorf("%v", err)
 	}
@@ -814,11 +814,11 @@ func (c *cmd) add() int {
 	}
 
 	m.Entries = append(m.Entries, model.NewEntry(created, label, nextID, r.Encoding))
-	if err := model.Save(c.Paths.UserModelsDir, c.user, gid, m); err != nil {
+	if err := model.Save(c.Paths.UserModelsDir, c.user, uid, m); err != nil {
 		return c.errorf("%v", err)
 	}
 	if extra != nil {
-		if err := c.saveSFace(m, created, label, nextID, extraEncs, gid); err != nil {
+		if err := c.saveSFace(m, created, label, nextID, extraEncs, uid); err != nil {
 			return c.errorf("the model was saved for dlib only: %v", err)
 		}
 	}
@@ -829,7 +829,7 @@ func (c *cmd) add() int {
 // saveSFace averages the sface descriptors and stores them under the same
 // id, time and label as the dlib model, after the .dat file (dat) has it.
 // Entries for models no longer in the .dat file go first.
-func (c *cmd) saveSFace(dat *model.Models, created int64, label string, id int64, encs [][]float64, gid int) error {
+func (c *cmd) saveSFace(dat *model.Models, created int64, label string, id int64, encs [][]float64, uid int) error {
 	r, err := enroll.Average(encs)
 	if err != nil {
 		return err
@@ -855,7 +855,7 @@ func (c *cmd) saveSFace(dat *model.Models, created int64, label string, id int64
 	}
 	m.Prune(dat)
 	m.Entries = append(m.Entries, model.NewTaggedEntry(created, label, id, enc, spec.Encoder))
-	return model.Save(c.Paths.SFaceModelsDir, c.user, gid, m)
+	return model.Save(c.Paths.SFaceModelsDir, c.user, uid, m)
 }
 
 func truncateRunes(s string, n int) string {

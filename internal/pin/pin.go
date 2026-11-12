@@ -83,21 +83,36 @@ const Length = 4
 // the PAM module (pam-pin.patch), which keeps the count.
 const MaxFails = 6
 
-// Valid says whether s is a PIN: exactly 4 ASCII digits
-func Valid(s string) bool {
+// Valid says whether s is a PIN: exactly 4 ASCII digits. PINs are byte
+// slices, not strings, so every copy can be cleared once it's used.
+func Valid(s []byte) bool {
 	if len(s) != Length {
 		return false
 	}
-	for i := 0; i < len(s); i++ {
-		if s[i] < '0' || s[i] > '9' {
+	for _, c := range s {
+		if c < '0' || c > '9' {
 			return false
 		}
 	}
 	return true
 }
 
+// cstring copies s into C memory with a NUL after it. The returned function
+// clears and frees the copy.
+func cstring(s []byte) (*C.char, func()) {
+	n := C.size_t(len(s) + 1)
+	p := C.malloc(n)
+	buf := unsafe.Slice((*byte)(p), len(s)+1)
+	copy(buf, s)
+	buf[len(s)] = 0
+	return (*C.char)(p), func() {
+		C.explicit_bzero(p, n)
+		C.free(p)
+	}
+}
+
 // Hash returns a yescrypt hash of the PIN, as crypt(3) writes it
-func Hash(pin string) (string, error) {
+func Hash(pin []byte) (string, error) {
 	if !Valid(pin) {
 		return "", errors.New("a PIN is exactly 4 digits")
 	}
@@ -105,8 +120,8 @@ func Hash(pin string) (string, error) {
 	if _, err := rand.Read(rnd); err != nil {
 		return "", err
 	}
-	cpin := C.CString(pin)
-	defer C.free(unsafe.Pointer(cpin))
+	cpin, done := cstring(pin)
+	defer done()
 	out := make([]C.char, C.CRYPT_OUTPUT_SIZE)
 	if C.hd_pin_hash(cpin, (*C.uchar)(unsafe.Pointer(&rnd[0])), C.int(len(rnd)), &out[0], C.int(len(out))) != 0 {
 		return "", errors.New("libcrypt can't make a yescrypt hash")
@@ -119,12 +134,13 @@ func Hash(pin string) (string, error) {
 }
 
 // Verify says whether pin is the PIN hash was made from
-func Verify(pin, hash string) bool {
+func Verify(pin []byte, hash string) bool {
 	if !Valid(pin) || !strings.HasPrefix(hash, "$y$") {
 		return false
 	}
-	cpin, chash := C.CString(pin), C.CString(hash)
-	defer C.free(unsafe.Pointer(cpin))
+	cpin, done := cstring(pin)
+	defer done()
+	chash := C.CString(hash)
 	defer C.free(unsafe.Pointer(chash))
 	return C.hd_pin_check(cpin, chash) == 1
 }

@@ -72,7 +72,7 @@ func (e *env) model(t *testing.T) {
 	enc := make([]float64, model.EncodingSize)
 	m := model.NewModels(model.EncodingSize)
 	m.Entries = append(m.Entries, model.NewEntry(100, "test", 0, enc))
-	if err := model.Save(filepath.Join(e.dir, "models"), "alice", os.Getegid(), m); err != nil {
+	if err := model.Save(filepath.Join(e.dir, "models"), "alice", os.Geteuid(), m); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -107,7 +107,7 @@ func TestExitCodes(t *testing.T) {
 		{"no model file", func(t *testing.T, e *env) {}, []string{"alice"}, compare.NoFaceModel, ""},
 		{"model without encodings", func(t *testing.T, e *env) {
 			m := model.NewModels(model.EncodingSize)
-			if err := model.Save(filepath.Join(e.dir, "models"), "alice", os.Getegid(), m); err != nil {
+			if err := model.Save(filepath.Join(e.dir, "models"), "alice", os.Geteuid(), m); err != nil {
 				t.Fatal(err)
 			}
 		}, []string{"alice"}, compare.NoFaceModel, ""},
