@@ -1,11 +1,19 @@
+//go:build linux && amd64
+
 // Package v4l2 reads grey frames straight from a V4L2 camera, a port of
 // Howdy's recorders/v4l2_reader.py. Only GREY and YUYV cameras are supported,
 // which covers the IR cameras Howdy is used with.
+//
+// The ioctl structs below are laid out by hand for x86_64 and checked by
+// the layout test, so the package only builds there. Another architecture
+// needs its own layouts and request numbers, checked the same way, before
+// the build tag is widened.
 package v4l2
 
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 	"unsafe"
@@ -162,7 +170,7 @@ func Start(dev Device, width, height, fps int) (*Camera, error) {
 func (c *Camera) start(width, height, fps int) error {
 	// Ask the camera what it has and pick one we can read as grey
 	var formats []uint32
-	for i := uint32(0); i < 64; i++ {
+	for i := range uint32(64) {
 		d := fmtdesc{Index: i, Type: bufTypeVideoCapture}
 		if err := c.dev.Ioctl(vidiocEnumFmt, unsafe.Pointer(&d)); err != nil {
 			break
@@ -171,9 +179,9 @@ func (c *Camera) start(width, height, fps int) error {
 	}
 	var want uint32
 	switch {
-	case contains(formats, PixFmtGrey):
+	case slices.Contains(formats, PixFmtGrey):
 		want = PixFmtGrey
-	case contains(formats, PixFmtYUYV):
+	case slices.Contains(formats, PixFmtYUYV):
 		want = PixFmtYUYV
 	default:
 		return fmt.Errorf("camera has no GREY or YUYV format, only %s", fourccs(formats))
@@ -222,7 +230,7 @@ func (c *Camera) start(width, height, fps int) error {
 	if req.Count == 0 || req.Count > 32 {
 		return fmt.Errorf("driver gave %d buffers", req.Count)
 	}
-	for i := uint32(0); i < req.Count; i++ {
+	for i := range req.Count {
 		b := c.newBuffer()
 		b.Index = i
 		if err := c.dev.Ioctl(vidiocQuerybuf, unsafe.Pointer(&b)); err != nil {
@@ -246,37 +254,28 @@ func (c *Camera) start(width, height, fps int) error {
 	return nil
 }
 
-func contains(list []uint32, v uint32) bool {
-	for _, x := range list {
-		if x == v {
-			return true
-		}
-	}
-	return false
-}
-
 func (c *Camera) newBuffer() buffer {
 	return buffer{Type: bufTypeVideoCapture, Memory: memoryMmap}
 }
 
-// Take every filled buffer off the queue, hand back all but the newest
-func (c *Camera) dequeueNewest() (*buffer, error) {
-	var newest *buffer
+// Take every filled buffer off the queue, hand back all but the newest.
+// ok is false when none was filled.
+func (c *Camera) dequeueNewest() (newest buffer, ok bool, err error) {
 	for {
 		b := c.newBuffer()
 		err := c.dev.Ioctl(vidiocDqbuf, unsafe.Pointer(&b))
 		if errors.Is(err, ErrAgain) {
-			return newest, nil
+			return newest, ok, nil
 		}
 		if err != nil {
-			return nil, fmt.Errorf("VIDIOC_DQBUF: %w", err)
+			return buffer{}, false, fmt.Errorf("VIDIOC_DQBUF: %w", err)
 		}
-		if newest != nil {
-			if err := c.dev.Ioctl(vidiocQbuf, unsafe.Pointer(newest)); err != nil {
-				return nil, fmt.Errorf("VIDIOC_QBUF: %w", err)
+		if ok {
+			if err := c.dev.Ioctl(vidiocQbuf, unsafe.Pointer(&newest)); err != nil {
+				return buffer{}, false, fmt.Errorf("VIDIOC_QBUF: %w", err)
 			}
 		}
-		newest = &b
+		newest, ok = b, true
 	}
 }
 
@@ -303,11 +302,11 @@ func (c *Camera) Read(timeout time.Duration, dst []byte) ([]byte, error) {
 			return nil, ErrTimeout
 		}
 
-		b, err := c.dequeueNewest()
+		b, ok, err := c.dequeueNewest()
 		if err != nil {
 			return nil, err
 		}
-		if b == nil {
+		if !ok {
 			continue
 		}
 		if int(b.Index) >= len(c.bufs) {
@@ -325,7 +324,7 @@ func (c *Camera) Read(timeout time.Duration, dst []byte) ([]byte, error) {
 			}
 		}
 		// The buffer gets refilled once it's queued again
-		if err := c.dev.Ioctl(vidiocQbuf, unsafe.Pointer(b)); err != nil {
+		if err := c.dev.Ioctl(vidiocQbuf, unsafe.Pointer(&b)); err != nil {
 			return nil, fmt.Errorf("VIDIOC_QBUF: %w", err)
 		}
 		if good {
@@ -376,7 +375,7 @@ func fourccs(formats []uint32) string {
 	if len(formats) == 0 {
 		return "none"
 	}
-	var parts []string
+	parts := make([]string, 0, len(formats))
 	for _, f := range formats {
 		parts = append(parts, string([]byte{byte(f), byte(f >> 8), byte(f >> 16), byte(f >> 24)}))
 	}

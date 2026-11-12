@@ -36,7 +36,7 @@ func Open(path, sha256Hex string) (*Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	buf := make([]C.char, C.HD_ORT_ERRLEN)
+	var buf [C.HD_ORT_ERRLEN]C.char
 	s := C.hd_ort_open(unsafe.Pointer(&data[0]), C.size_t(len(data)), &buf[0])
 	runtime.KeepAlive(data)
 	if s == nil {
@@ -50,62 +50,78 @@ func (s *Session) Output0() string {
 	return C.GoString(C.hd_ort_output0(s.s))
 }
 
-// Run feeds input, shaped dims, to the model and returns the named outputs.
-// caps[i] is the most values output i may have.
-func (s *Session) Run(input []float32, dims []int64, names []string, caps []int) ([][]float32, error) {
+// Outputs is the set of outputs Run fetches, with the most values each may
+// have. Build one per model and keep it: the names are C strings, made
+// once, so Run passes no Go pointer inside a C array.
+type Outputs struct {
+	n     int
+	names unsafe.Pointer // char ** in C memory
+	caps  []C.size_t
+	Total int // floats needed for every output at its cap
+}
+
+// Outputs prepares names and caps for Run
+func (s *Session) Outputs(names []string, caps []int) (*Outputs, error) {
+	if len(names) != len(caps) || len(names) == 0 || len(names) > 16 {
+		return nil, errors.New("onnx: bad outputs")
+	}
+	o := &Outputs{n: len(names), caps: make([]C.size_t, len(names))}
+	o.names = C.malloc(C.size_t(len(names)) * C.size_t(unsafe.Sizeof(uintptr(0))))
+	arr := unsafe.Slice((**C.char)(o.names), len(names))
+	for i, name := range names {
+		arr[i] = C.CString(name)
+		o.caps[i] = C.size_t(caps[i])
+		o.Total += caps[i]
+	}
+	return o, nil
+}
+
+// Close frees the names
+func (o *Outputs) Close() {
+	if o.names == nil {
+		return
+	}
+	for _, p := range unsafe.Slice((**C.char)(o.names), o.n) {
+		C.free(unsafe.Pointer(p))
+	}
+	C.free(o.names)
+	o.names = nil
+}
+
+// Run feeds input, shaped dims, to the model and returns one slice per
+// output, in o's order. They alias dst, which must hold o.Total floats, and
+// are only good until the next Run with the same dst.
+func (s *Session) Run(input []float32, dims []int64, o *Outputs, dst []float32) ([][]float32, error) {
 	n := 1
 	for _, d := range dims {
 		n *= int(d)
 	}
-	if len(dims) == 0 || n != len(input) || len(names) != len(caps) || len(names) == 0 || len(names) > 16 {
-		return nil, errors.New("onnx: bad input shape or outputs")
+	if len(dims) == 0 || len(input) == 0 || n != len(input) || len(dst) < o.Total {
+		return nil, errors.New("onnx: bad input shape or output buffer")
 	}
-
-	// Everything C reads lives in C memory, so no Go pointer is passed in a
-	// C array
-	cnames := make([]*C.char, len(names))
-	for i, name := range names {
-		cnames[i] = C.CString(name)
-	}
-	defer func() {
-		for _, p := range cnames {
-			C.free(unsafe.Pointer(p))
-		}
-	}()
-	cn := C.malloc(C.size_t(len(names)) * C.size_t(unsafe.Sizeof(uintptr(0))))
-	co := C.malloc(C.size_t(len(names)) * C.size_t(unsafe.Sizeof(uintptr(0))))
-	defer C.free(cn)
-	defer C.free(co)
-	nameArr := unsafe.Slice((**C.char)(cn), len(names))
-	outArr := unsafe.Slice((**C.float)(co), len(names))
-	ccaps := make([]C.size_t, len(names))
-	lens := make([]C.size_t, len(names))
-	for i := range names {
-		nameArr[i] = cnames[i]
-		outArr[i] = (*C.float)(C.malloc(C.size_t(max(caps[i], 1)) * 4))
-		ccaps[i] = C.size_t(caps[i])
-	}
-	defer func() {
-		for _, p := range outArr {
-			C.free(unsafe.Pointer(p))
-		}
-	}()
 	cdims := make([]C.int64_t, len(dims))
 	for i, d := range dims {
 		cdims[i] = C.int64_t(d)
 	}
+	lens := make([]C.size_t, o.n)
+	var buf [C.HD_ORT_ERRLEN]C.char
 
-	buf := make([]C.char, C.HD_ORT_ERRLEN)
 	s.mu.Lock()
+	if s.s == nil {
+		s.mu.Unlock()
+		return nil, errors.New("onnx: session is closed")
+	}
 	rc := C.hd_ort_run(s.s, &cdims[0], C.int(len(dims)), (*C.float)(unsafe.Pointer(&input[0])),
-		(**C.char)(cn), C.int(len(names)), (**C.float)(co), &ccaps[0], &lens[0], &buf[0])
+		(**C.char)(o.names), C.int(o.n), (*C.float)(unsafe.Pointer(&dst[0])), &o.caps[0], &lens[0], &buf[0])
 	s.mu.Unlock()
 	if rc < 0 {
 		return nil, errors.New("onnx: " + C.GoString(&buf[0]))
 	}
-	out := make([][]float32, len(names))
-	for i := range names {
-		out[i] = append([]float32(nil), unsafe.Slice((*float32)(unsafe.Pointer(outArr[i])), int(lens[i]))...)
+	out := make([][]float32, o.n)
+	off := 0
+	for i := range out {
+		out[i] = dst[off : off+int(lens[i]) : off+int(o.caps[i])]
+		off += int(o.caps[i])
 	}
 	return out, nil
 }

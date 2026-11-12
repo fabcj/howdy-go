@@ -10,9 +10,9 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/fabcj/howdy-go/internal/backend"
 	"github.com/fabcj/howdy-go/internal/imgproc"
 	"github.com/fabcj/howdy-go/internal/onnx"
+	"github.com/fabcj/howdy-go/internal/sface/spec"
 )
 
 // Compares against OpenCV's FaceDetectorYN and FaceRecognizerSF. Set
@@ -41,16 +41,20 @@ func TestMatchesOpenCV(t *testing.T) {
 	}
 	delete(ref, "score_threshold")
 
-	det, err := onnx.Open(filepath.Join(models, "yunet_2026may.onnx"), backend.YuNetSHA256)
+	det, err := onnx.Open(filepath.Join(models, "yunet_2026may.onnx"), spec.YuNetSHA256)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer det.Close()
-	rec, err := onnx.Open(filepath.Join(models, "sface_2021dec.onnx"), backend.SFaceSHA256)
+	rec, err := onnx.Open(filepath.Join(models, "sface_2021dec.onnx"), spec.SFaceSHA256)
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := &Models{det: det, rec: rec, recOut: rec.Output0()}
+	recOut, err := rec.Outputs([]string{rec.Output0()}, []int{spec.Size})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := &Models{det: det, rec: rec, recOut: recOut}
 	defer m.Close()
 
 	var worstBox, worstScore, worstCos float64 = 0, 0, 1
@@ -68,7 +72,7 @@ func TestMatchesOpenCV(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		found, err := detect(det, imgproc.CLAHE(g, 2.0, 8, 8), score)
+		found, err := m.detect(imgproc.CLAHE(g, 2.0, 8, 8), score)
 		if err != nil {
 			t.Fatal(err)
 		}

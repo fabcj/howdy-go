@@ -14,11 +14,15 @@ import (
 	"github.com/fabcj/howdy-go/internal/cli"
 	"github.com/fabcj/howdy-go/internal/compare"
 	"github.com/fabcj/howdy-go/internal/config"
+	"github.com/fabcj/howdy-go/internal/face"
+	"github.com/fabcj/howdy-go/internal/paths"
 )
 
 func main() {
+	l := paths.Installed()
 	os.Exit(cli.Main(&cli.Env{
 		Args:   os.Args[1:],
+		Paths:  l,
 		Getenv: os.Getenv,
 		Stdin:  os.Stdin,
 		Stdout: os.Stdout,
@@ -48,7 +52,9 @@ func main() {
 			}
 			return c, c.Close, nil
 		},
-		Faces: loader.Load,
+		Faces: func(s *config.Settings, name config.Recognizer) (face.Recognizer, error) {
+			return loader.Load(l, s, name)
+		},
 		Edit: func(argv []string) error {
 			cmd := exec.Command(argv[0], argv[1:]...)
 			cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr

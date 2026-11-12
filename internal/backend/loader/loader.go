@@ -10,16 +10,16 @@ import (
 	"github.com/fabcj/howdy-go/internal/sface"
 )
 
-// Load loads the named recogniser: "dlib" or "sface"
-func Load(s *config.Settings, name string) (face.Recognizer, error) {
-	if name == "sface" {
-		m, err := sface.Load(paths.ONNXDir)
+// Load loads the named recogniser
+func Load(l paths.Layout, s *config.Settings, name config.Recognizer) (face.Recognizer, error) {
+	if name == config.SFace {
+		m, err := sface.Load(l.ONNXDir)
 		if err != nil {
 			return nil, err
 		}
 		return m, nil
 	}
-	m, err := dlib.Load(paths.HOGDetector(), paths.CNNDetector(), paths.ShapePredictor(), paths.Recognizer(),
+	m, err := dlib.Load(l.HOGDetector(), l.CNNDetector(), l.ShapePredictor(), l.Recognizer(),
 		s.UseCNN, s.DetectionUpsample)
 	if err != nil {
 		return nil, err

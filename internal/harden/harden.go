@@ -55,7 +55,7 @@ func Limits(budget uint64, cpuSeconds uint64) error {
 
 // vmSize reads VmSize out of /proc/self/status, in bytes
 func vmSize(status []byte) (uint64, error) {
-	for _, line := range strings.Split(string(status), "\n") {
+	for line := range strings.Lines(string(status)) {
 		rest, ok := strings.CutPrefix(line, "VmSize:")
 		if !ok {
 			continue
@@ -73,9 +73,19 @@ func vmSize(status []byte) (uint64, error) {
 	return 0, errors.New("no VmSize in /proc/self/status")
 }
 
-// Nobody looks up the nobody user in /etc/passwd, without NSS
-func Nobody() (uid, gid int, err error) {
-	return lookup("/etc/passwd", "nobody")
+// DropUser is the user to run the frame loop as: howdy, which the package
+// creates through sysusers.d, or nobody where that user doesn't exist.
+// Looked up in /etc/passwd directly, without NSS.
+const DropUser = "howdy"
+
+// Unprivileged returns the uid, gid and name of the user to drop to
+func Unprivileged() (uid, gid int, name string, err error) {
+	uid, gid, err = lookup("/etc/passwd", DropUser)
+	if err == nil {
+		return uid, gid, DropUser, nil
+	}
+	uid, gid, err = lookup("/etc/passwd", "nobody")
+	return uid, gid, "nobody", err
 }
 
 func lookup(passwd, name string) (uid, gid int, err error) {
@@ -158,7 +168,7 @@ func Verify(uid, gid int) error {
 			continue
 		}
 		seen := 0
-		for _, line := range strings.Split(string(data), "\n") {
+		for line := range strings.Lines(string(data)) {
 			k, v, ok := strings.Cut(line, ":")
 			if !ok {
 				continue

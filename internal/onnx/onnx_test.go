@@ -34,7 +34,12 @@ func TestRunSFace(t *testing.T) {
 		in[i] = float32(i % 251)
 	}
 	start = time.Now()
-	out, err := s.Run(in, []int64{1, 3, 112, 112}, []string{s.Output0()}, []int{128})
+	o, err := s.Outputs([]string{s.Output0()}, []int{128})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer o.Close()
+	out, err := s.Run(in, []int64{1, 3, 112, 112}, o, make([]float32, o.Total))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +47,12 @@ func TestRunSFace(t *testing.T) {
 	if len(out[0]) != 128 {
 		t.Fatalf("%d values, want 128", len(out[0]))
 	}
-	if _, err := s.Run(in, []int64{1, 3, 112, 112}, []string{s.Output0()}, []int{64}); err == nil {
+	small, err := s.Outputs([]string{s.Output0()}, []int{64})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer small.Close()
+	if _, err := s.Run(in, []int64{1, 3, 112, 112}, small, make([]float32, small.Total)); err == nil {
 		t.Error("an output bigger than its room didn't fail")
 	}
 }

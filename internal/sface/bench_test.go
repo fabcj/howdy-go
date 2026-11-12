@@ -11,7 +11,7 @@ import (
 // Needs the installed models. On a frame with no face the detector does the
 // same work, and Encode gets a made-up face.
 func benchModels(b *testing.B) *Models {
-	m, err := Load(paths.ONNXDir)
+	m, err := Load(paths.Installed().ONNXDir)
 	if err != nil {
 		b.Skip(err)
 	}

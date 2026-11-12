@@ -100,7 +100,7 @@ func run(label, root, device string, n int, keepBelow float64, every, wait time.
 	if os.Geteuid() == 0 {
 		return errors.New("run this as your own user, in the video group, not as root")
 	}
-	f, err := config.Read(paths.ConfigFile())
+	f, err := config.Read(paths.Installed().ConfigFile())
 	if err != nil {
 		return err
 	}

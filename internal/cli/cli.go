@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -25,7 +26,9 @@ import (
 	"github.com/fabcj/howdy-go/internal/model"
 	"github.com/fabcj/howdy-go/internal/paths"
 	"github.com/fabcj/howdy-go/internal/pyfmt"
+	"github.com/fabcj/howdy-go/internal/sface/spec"
 	"github.com/fabcj/howdy-go/internal/snapshot"
+	"github.com/fabcj/howdy-go/internal/username"
 )
 
 // Version of howdy-go, set by the PKGBUILD
@@ -34,6 +37,7 @@ var Version = "dev"
 // Env is everything the CLI touches outside itself, so tests can fake it
 type Env struct {
 	Args   []string // without the program name
+	Paths  paths.Layout
 	Getenv func(string) string
 	Stdin  io.Reader
 	Stdout io.Writer
@@ -49,11 +53,10 @@ type Env struct {
 
 	// Opens the camera from the settings, with a function to close it
 	Camera func(s *config.Settings) (compare.Camera, func(), error)
-	// Loads the face models
-	// Faces loads a recogniser, "dlib" or "sface"
-	Faces func(s *config.Settings, name string) (face.Recognizer, error)
+	// Faces loads a recogniser
+	Faces func(s *config.Settings, name config.Recognizer) (face.Recognizer, error)
 	// Asks for a secret without showing it, for howdy pin
-	ReadHidden func(prompt string) (string, error)
+	ReadHidden func(prompt string) ([]byte, error)
 	// Runs the editor with the config file, as argv
 	Edit     func(argv []string) error
 	LookPath func(string) (string, error)
@@ -142,7 +145,7 @@ func Main(e *Env) int {
 
 	c := &cmd{Env: e, a: a, in: bufio.NewReader(e.Stdin), user: a.user}
 	// The user ends up in a path under the models dir, and this runs as root
-	if a.command != "version" && a.command != "config" && !model.ValidUser(a.user) {
+	if a.command != "version" && a.command != "config" && !username.Valid(a.user) {
 		return c.errorf("%q isn't a valid username", a.user)
 	}
 
@@ -194,7 +197,7 @@ func (c *cmd) confirm(question string) bool {
 }
 
 func (c *cmd) settings() (*config.File, *config.Settings, error) {
-	f, err := config.Read(paths.ConfigFile())
+	f, err := config.Read(c.Paths.ConfigFile())
 	if err != nil {
 		return nil, nil, err
 	}
@@ -208,11 +211,11 @@ func dirExists(p string) bool {
 }
 
 func (c *cmd) loadModels() (*model.Models, error) {
-	return model.Load(paths.UserModelsDir, c.user, paths.ModelOwnerUID())
+	return model.Load(c.Paths.UserModelsDir, c.user, c.Paths.ModelOwner)
 }
 
 func (c *cmd) list() int {
-	if !dirExists(paths.UserModelsDir) {
+	if !dirExists(c.Paths.UserModelsDir) {
 		c.say("Face models have not been initialized yet, please run:")
 		c.printf("\n\tsudo howdy -U %s add\n\n", c.user)
 		return 1
@@ -235,19 +238,11 @@ func (c *cmd) list() int {
 	}
 	for _, e := range m.Entries {
 		id := model.Str(e.Values["id"])
-		c.printf("%s", id)
 		if c.a.plain {
-			c.printf(",")
+			c.printf("%s,%s,%s\n", id, localTime(e.Values["time"]), model.Label(e))
 		} else {
-			c.printf("%s", strings.Repeat(" ", max(0, 4-len(id))))
+			c.printf("%-4s%s  %s\n", id, localTime(e.Values["time"]), model.Label(e))
 		}
-		c.printf("%s", localTime(e.Values["time"]))
-		if c.a.plain {
-			c.printf(",")
-		} else {
-			c.printf("  ")
-		}
-		c.say(model.Label(e))
 	}
 	c.say()
 	return 0
@@ -265,17 +260,17 @@ func localTime(v model.Value) string {
 }
 
 func (c *cmd) clear() int {
-	if !dirExists(paths.UserModelsDir) {
+	if !dirExists(c.Paths.UserModelsDir) {
 		return c.fail("No models created yet, can't clear them if they don't exist")
 	}
-	p, _ := model.Path(paths.UserModelsDir, c.user)
+	p, _ := model.Path(c.Paths.UserModelsDir, c.user)
 	if st, err := os.Lstat(p); err != nil || !st.Mode().IsRegular() {
 		return c.fail("%s has no models or they have been cleared already", c.user)
 	}
 	if !c.a.yes && !c.confirm("This will clear all models for "+c.user) {
 		return 1
 	}
-	if err := model.Remove(paths.UserModelsDir, c.user); err != nil {
+	if err := model.Remove(c.Paths.UserModelsDir, c.user); err != nil {
 		return c.errorf("%v", err)
 	}
 	if err := c.removeSFace(); err != nil {
@@ -289,7 +284,7 @@ func (c *cmd) clear() int {
 // leftover file couldn't match anyway: compare only uses descriptors whose
 // model the .dat file still has.
 func (c *cmd) removeSFace() error {
-	err := model.Remove(paths.SFaceModelsDir, c.user)
+	err := model.Remove(c.Paths.SFaceModelsDir, c.user)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
@@ -299,7 +294,7 @@ func (c *cmd) removeSFace() error {
 // pruneSFace removes the sface descriptors whose model the .dat file (dat)
 // no longer has, if there are any
 func (c *cmd) pruneSFace(dat *model.Models) error {
-	m, err := model.LoadSize(paths.SFaceModelsDir, c.user, paths.ModelOwnerUID(), backend.SFaceSize)
+	m, err := model.LoadSize(c.Paths.SFaceModelsDir, c.user, c.Paths.ModelOwner, spec.Size)
 	if errors.Is(err, model.ErrNoModel) {
 		return nil
 	}
@@ -310,11 +305,11 @@ func (c *cmd) pruneSFace(dat *model.Models) error {
 	if len(m.Entries) == 0 {
 		return c.removeSFace()
 	}
-	gid, err := c.UserGID(c.user)
+	uid, err := c.UserUID(c.user)
 	if err != nil {
 		return err
 	}
-	return model.Save(paths.SFaceModelsDir, c.user, gid, m)
+	return model.Save(c.Paths.SFaceModelsDir, c.user, uid, m)
 }
 
 func (c *cmd) remove() int {
@@ -326,7 +321,7 @@ func (c *cmd) remove() int {
 		c.say("\n\thowdy list\n")
 		return 1
 	}
-	if !dirExists(paths.UserModelsDir) {
+	if !dirExists(c.Paths.UserModelsDir) {
 		c.say("Face models have not been initialized yet, please run:")
 		c.say("\n\thowdy add\n")
 		return 1
@@ -342,13 +337,7 @@ func (c *cmd) remove() int {
 	}
 
 	id := c.a.arguments[0]
-	found := -1
-	for i, e := range m.Entries {
-		if model.Str(e.Values["id"]) == id {
-			found = i
-			break
-		}
-	}
+	found := slices.IndexFunc(m.Entries, func(e *model.Entry) bool { return model.Str(e.Values["id"]) == id })
 	if found >= 0 && !c.a.yes {
 		if !c.confirm(fmt.Sprintf("This will remove the model called \"%s\" for %s", model.Label(m.Entries[found]), c.user)) {
 			return 1
@@ -360,7 +349,7 @@ func (c *cmd) remove() int {
 	}
 
 	if len(m.Entries) == 1 {
-		if err := model.Remove(paths.UserModelsDir, c.user); err != nil {
+		if err := model.Remove(c.Paths.UserModelsDir, c.user); err != nil {
 			return c.errorf("%v", err)
 		}
 		if err := c.removeSFace(); err != nil {
@@ -369,13 +358,7 @@ func (c *cmd) remove() int {
 		c.say("Removed last model, howdy disabled for user")
 		return 0
 	}
-	var rest []*model.Object
-	for _, e := range m.Entries {
-		if model.Str(e.Values["id"]) != id {
-			rest = append(rest, e)
-		}
-	}
-	m.Entries = rest
+	m.Entries = slices.Delete(m.Entries, found, found+1)
 	if err := c.save(m); err != nil {
 		return c.errorf("%v", err)
 	}
@@ -387,11 +370,11 @@ func (c *cmd) remove() int {
 }
 
 func (c *cmd) save(m *model.Models) error {
-	gid, err := c.UserGID(c.user)
+	uid, err := c.UserUID(c.user)
 	if err != nil {
 		return err
 	}
-	return model.Save(paths.UserModelsDir, c.user, gid, m)
+	return model.Save(c.Paths.UserModelsDir, c.user, uid, m)
 }
 
 func (c *cmd) config() int {
@@ -417,7 +400,7 @@ func (c *cmd) config() int {
 	}
 	c.printf("Opening config.ini in %s\n", name)
 	// As an argv, never through a shell
-	if err := c.Edit([]string{editor, paths.ConfigFile()}); err != nil {
+	if err := c.Edit([]string{editor, c.Paths.ConfigFile()}); err != nil {
 		c.printf("Failed to open editor: %v\n", err)
 	}
 	return 0
@@ -438,7 +421,7 @@ func (c *cmd) disable() int {
 		return c.fail("Please only use 0 (enable) or 1 (disable) as an argument")
 	}
 
-	f, err := config.Read(paths.ConfigFile())
+	f, err := config.Read(c.Paths.ConfigFile())
 	if err != nil {
 		return c.errorf("%v", err)
 	}
@@ -449,7 +432,7 @@ func (c *cmd) disable() int {
 	if err != nil {
 		return c.errorf("%v", err)
 	}
-	if err := writeConfig(paths.ConfigFile(), data); err != nil {
+	if err := writeConfig(c.Paths.ConfigFile(), data); err != nil {
 		return c.errorf("%v", err)
 	}
 	if value == "true" {
@@ -468,7 +451,7 @@ func (c *cmd) set() int {
 		return 1
 	}
 	key, value := c.a.arguments[0], c.a.arguments[1]
-	f, err := config.Read(paths.ConfigFile())
+	f, err := config.Read(c.Paths.ConfigFile())
 	if err != nil {
 		return c.errorf("%v", err)
 	}
@@ -493,7 +476,7 @@ func (c *cmd) set() int {
 	if err != nil {
 		return c.errorf("%v", err)
 	}
-	if err := writeConfig(paths.ConfigFile(), data); err != nil {
+	if err := writeConfig(c.Paths.ConfigFile(), data); err != nil {
 		return c.errorf("%v", err)
 	}
 	c.say("Config option updated")
@@ -512,11 +495,10 @@ func writeConfig(path string, data []byte) error {
 	}
 	tmp := path + ".tmp"
 	_ = unix.Unlink(tmp)
-	fd, err := unix.Open(tmp, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0o600)
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL|unix.O_NOFOLLOW, 0o600)
 	if err != nil {
-		return &fs.PathError{Op: "open", Path: tmp, Err: err}
+		return err
 	}
-	f := os.NewFile(uintptr(fd), tmp)
 	ok := false
 	defer func() {
 		if !ok {
@@ -525,11 +507,11 @@ func writeConfig(path string, data []byte) error {
 		}
 	}()
 	if unix.Geteuid() == 0 {
-		if err := unix.Fchown(fd, int(st.Uid), int(st.Gid)); err != nil {
+		if err := f.Chown(int(st.Uid), int(st.Gid)); err != nil {
 			return err
 		}
 	}
-	if err := unix.Fchmod(fd, st.Mode&0o7777); err != nil {
+	if err := f.Chmod(os.FileMode(st.Mode & 0o7777)); err != nil {
 		return err
 	}
 	if _, err := f.Write(data); err != nil {
@@ -554,9 +536,7 @@ func writeConfig(path string, data []byte) error {
 
 func (c *cmd) noDevice(s *config.Settings) int {
 	if s.WarnNoDevice {
-		c.say("Howdy could not find a camera device at the path specified in the config file.")
-		c.say("It is very likely that the path is not configured correctly, please edit the 'device_path' config value by running:")
-		c.say("\n\tsudo howdy config\n")
+		c.say(backend.NoDeviceText)
 	}
 	return compare.BadDevice
 }
@@ -631,10 +611,10 @@ func (c *cmd) snapshot() int {
 		"Date: " + now.UTC().Format("2006/01/02 15:04:05") + " UTC",
 		"Dark threshold config: " + pyfmt.Float(s.DarkThreshold),
 		"Certainty config: " + pyfmt.Float(s.Certainty),
-	}, snapshot.LoadLogo(paths.Logo()))
+	}, snapshot.LoadLogo(c.Paths.Logo()))
 	path := ""
 	if err == nil {
-		path, err = snapshot.Save(paths.SnapshotsDir(), now, img)
+		path, err = snapshot.Save(c.Paths.SnapshotsDir(), now, img)
 	}
 	if err != nil {
 		c.say("Could not save the snapshot")
@@ -646,31 +626,29 @@ func (c *cmd) snapshot() int {
 }
 
 func (c *cmd) add() int {
-	if _, err := os.Stat(paths.ShapePredictor()); err != nil {
-		c.say("Data files have not been downloaded, please run the following commands:")
-		c.say("\n\tcd " + paths.DlibDataDir)
-		c.say("\tsudo ./install.sh\n")
+	if msg := backend.MissingData(c.Paths, config.Dlib); msg != "" {
+		c.say(msg)
 		return 1
 	}
 	_, s, err := c.settings()
 	if err != nil {
 		return c.errorf("%v", err)
 	}
-	gid, err := c.UserGID(c.user)
+	uid, err := c.UserUID(c.user)
 	if err != nil {
 		return c.errorf("%v", err)
 	}
 	// dlib always: the .dat file it writes is what list, remove, the PAM
 	// module and Python Howdy go by, and recognizer = dlib has to keep working
-	faces, err := c.Faces(s, "dlib")
+	faces, err := c.Faces(s, config.Dlib)
 	if err != nil {
 		return c.errorf("can't load the dlib models: %v", err)
 	}
 	defer faces.Close()
 	// And the configured recogniser too, from the same frames
 	var extra face.Recognizer
-	if s.Recognizer != "dlib" {
-		if msg := backend.MissingData(s.Recognizer); msg != "" {
+	if s.Recognizer != config.Dlib {
+		if msg := backend.MissingData(c.Paths, s.Recognizer); msg != "" {
 			c.say(msg)
 			return 1
 		}
@@ -681,14 +659,14 @@ func (c *cmd) add() int {
 		defer extra.Close()
 	}
 
-	if !dirExists(paths.UserModelsDir) {
+	if !dirExists(c.Paths.UserModelsDir) {
 		c.say("No face model folder found, creating one")
 		// 0755 whatever the umask, the models loader refuses anything writable
 		// by others
-		if err := os.MkdirAll(paths.UserModelsDir, 0o755); err != nil {
+		if err := os.MkdirAll(c.Paths.UserModelsDir, 0o755); err != nil {
 			return c.errorf("%v", err)
 		}
-		if err := os.Chmod(paths.UserModelsDir, 0o755); err != nil {
+		if err := os.Chmod(c.Paths.UserModelsDir, 0o755); err != nil {
 			return c.errorf("%v", err)
 		}
 	}
@@ -742,17 +720,47 @@ func (c *cmd) add() int {
 	c.say("\nPlease look straight into the camera")
 	c.Sleep(2 * time.Second)
 
+	encs, extraEncs, code := c.enrol(cam, closeCam, faces, extra, s)
+	if code != 0 {
+		return code
+	}
+
+	r, err := enroll.Average(encs)
+	if err != nil {
+		return c.errorf("%v", err)
+	}
+	if !c.a.plain {
+		c.printf("\nUsed %d of %d frames, spread %.2f (worst %.2f)\n", r.Used, r.Total, r.Median, r.Worst)
+	}
+
+	m.Entries = append(m.Entries, model.NewEntry(created, label, nextID, r.Encoding))
+	if err := model.Save(c.Paths.UserModelsDir, c.user, uid, m); err != nil {
+		return c.errorf("%v", err)
+	}
+	if extra != nil {
+		if err := c.saveSFace(m, created, label, nextID, extraEncs, uid); err != nil {
+			return c.errorf("the model was saved for dlib only: %v", err)
+		}
+	}
+	c.say("\nScan complete\nAdded a new model to " + c.user)
+	return 0
+}
+
+// enrol reads frames until each recogniser has EnrollFrames descriptors or
+// the frame budget runs out. It closes the camera when it's done, and
+// returns a non-zero exit code with the message already printed when too
+// few frames had exactly one face.
+func (c *cmd) enrol(cam compare.Camera, closeCam func(), faces, extra face.Recognizer, s *config.Settings) (encs, extraEncs [][]float64, code int) {
 	// Throw away what the camera buffered while we waited, and give its
 	// exposure a moment to settle. The first frames are often brighter or
 	// stale, and a model built from one of them matches the user badly
 	settle := c.Now().Add(500 * time.Millisecond)
 	for c.Now().Before(settle) {
 		if _, code := c.readFrame(cam); code != 0 {
-			return code
+			return nil, nil, code
 		}
 	}
 
-	var encs, extraEncs [][]float64
 	frames, valid, darkTries := 0, 0, 0
 	var darkTotal float32
 	more := func() bool {
@@ -762,7 +770,7 @@ func (c *cmd) add() int {
 		frames++
 		raw, code := c.readFrame(cam)
 		if code != 0 {
-			return code
+			return nil, nil, code
 		}
 		gs := imgproc.CLAHE(raw, 2.0, 8, 8)
 		darkness, total := imgproc.Darkness(gs)
@@ -778,30 +786,30 @@ func (c *cmd) add() int {
 
 		rects, err := faces.Detect(gs)
 		if err != nil {
-			return c.errorf("face detection failed: %v", err)
+			return nil, nil, c.errorf("face detection failed: %v", err)
 		}
 		var extraRects []face.Rect
 		if extra != nil {
 			if extraRects, err = extra.Detect(gs); err != nil {
-				return c.errorf("face detection failed: %v", err)
+				return nil, nil, c.errorf("face detection failed: %v", err)
 			}
 		}
 		// Either detector seeing two faces stops it
 		if len(rects) > 1 || len(extraRects) > 1 {
 			closeCam()
-			return c.fail("Multiple faces detected, aborting")
+			return nil, nil, c.fail("Multiple faces detected, aborting")
 		}
 		if len(rects) == 1 && len(encs) < s.EnrollFrames {
 			enc, err := faces.Encode(raw, rects[0])
 			if err != nil {
-				return c.errorf("face encoding failed: %v", err)
+				return nil, nil, c.errorf("face encoding failed: %v", err)
 			}
 			encs = append(encs, enc.Descriptor)
 		}
 		if len(extraRects) == 1 && len(extraEncs) < s.EnrollFrames {
 			enc, err := extra.Encode(raw, extraRects[0])
 			if err != nil {
-				return c.errorf("face encoding failed: %v", err)
+				return nil, nil, c.errorf("face encoding failed: %v", err)
 			}
 			extraEncs = append(extraEncs, enc.Descriptor)
 		}
@@ -818,40 +826,22 @@ func (c *cmd) add() int {
 		default:
 			c.say("No face detected, aborting")
 		}
-		return 1
+		return nil, nil, 1
 	}
 	if len(encs) < min(3, s.EnrollFrames) {
-		return c.fail("Only saw a face in %d frames, please hold still and try again", len(encs))
+		return nil, nil, c.fail("Only saw a face in %d frames, please hold still and try again", len(encs))
 	}
 	if extra != nil && len(extraEncs) < min(3, s.EnrollFrames) {
-		return c.fail("%s only saw a face in %d frames, please hold still and try again", s.Recognizer, len(extraEncs))
+		return nil, nil, c.fail("%s only saw a face in %d frames, please hold still and try again", s.Recognizer, len(extraEncs))
 	}
 
-	r, err := enroll.Average(encs)
-	if err != nil {
-		return c.errorf("%v", err)
-	}
-	if !c.a.plain {
-		c.printf("\nUsed %d of %d frames, spread %.2f (worst %.2f)\n", r.Used, r.Total, r.Median, r.Worst)
-	}
-
-	m.Entries = append(m.Entries, model.NewEntry(created, label, nextID, r.Encoding))
-	if err := model.Save(paths.UserModelsDir, c.user, gid, m); err != nil {
-		return c.errorf("%v", err)
-	}
-	if extra != nil {
-		if err := c.saveSFace(m, created, label, nextID, extraEncs, gid); err != nil {
-			return c.errorf("the model was saved for dlib only: %v", err)
-		}
-	}
-	c.say("\nScan complete\nAdded a new model to " + c.user)
-	return 0
+	return encs, extraEncs, 0
 }
 
 // saveSFace averages the sface descriptors and stores them under the same
 // id, time and label as the dlib model, after the .dat file (dat) has it.
 // Entries for models no longer in the .dat file go first.
-func (c *cmd) saveSFace(dat *model.Models, created int64, label string, id int64, encs [][]float64, gid int) error {
+func (c *cmd) saveSFace(dat *model.Models, created int64, label string, id int64, encs [][]float64, uid int) error {
 	r, err := enroll.Average(encs)
 	if err != nil {
 		return err
@@ -860,24 +850,24 @@ func (c *cmd) saveSFace(dat *model.Models, created int64, label string, id int64
 	if !c.a.plain {
 		c.printf("sface: used %d of %d frames, least similar %.2f\n", r.Used, r.Total, face.Cosine(r.Worst/10))
 	}
-	if !dirExists(paths.SFaceModelsDir) {
-		if err := os.MkdirAll(paths.SFaceModelsDir, 0o755); err != nil {
+	if !dirExists(c.Paths.SFaceModelsDir) {
+		if err := os.MkdirAll(c.Paths.SFaceModelsDir, 0o755); err != nil {
 			return err
 		}
-		if err := os.Chmod(paths.SFaceModelsDir, 0o755); err != nil {
+		if err := os.Chmod(c.Paths.SFaceModelsDir, 0o755); err != nil {
 			return err
 		}
 	}
-	m, err := model.LoadSize(paths.SFaceModelsDir, c.user, paths.ModelOwnerUID(), backend.SFaceSize)
+	m, err := model.LoadSize(c.Paths.SFaceModelsDir, c.user, c.Paths.ModelOwner, spec.Size)
 	if errors.Is(err, model.ErrNoModel) {
-		m, err = model.NewModels(backend.SFaceSize), nil
+		m, err = model.NewModels(spec.Size), nil
 	}
 	if err != nil {
 		return err
 	}
 	m.Prune(dat)
-	m.Entries = append(m.Entries, model.NewTaggedEntry(created, label, id, enc, backend.SFaceEncoder))
-	return model.Save(paths.SFaceModelsDir, c.user, gid, m)
+	m.Entries = append(m.Entries, model.NewTaggedEntry(created, label, id, enc, spec.Encoder))
+	return model.Save(c.Paths.SFaceModelsDir, c.user, uid, m)
 }
 
 func truncateRunes(s string, n int) string {
@@ -888,7 +878,7 @@ func truncateRunes(s string, n int) string {
 	return string(r[:n])
 }
 
-// UserGID looks a user's primary group up
+// UserUID looks a user's id up
 func UserUID(name string) (int, error) {
 	u, err := user.Lookup(name)
 	if err != nil {
@@ -897,6 +887,7 @@ func UserUID(name string) (int, error) {
 	return strconv.Atoi(u.Uid)
 }
 
+// UserGID looks a user's primary group up
 func UserGID(name string) (int, error) {
 	u, err := user.Lookup(name)
 	if err != nil {

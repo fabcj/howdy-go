@@ -17,7 +17,8 @@ func benchSetup(b *testing.B) (*Models, string) {
 	if dir == "" {
 		b.Skip("HOWDY_GO_TESTDATA not set")
 	}
-	m, err := Load(paths.HOGDetector(), paths.CNNDetector(), paths.ShapePredictor(), paths.Recognizer(), false, 0)
+	l := paths.Installed()
+	m, err := Load(l.HOGDetector(), l.CNNDetector(), l.ShapePredictor(), l.Recognizer(), false, 0)
 	if err != nil {
 		b.Skip(err)
 	}

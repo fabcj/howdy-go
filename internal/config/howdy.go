@@ -6,6 +6,14 @@ import (
 	"os"
 )
 
+// Recognizer names a face backend
+type Recognizer string
+
+const (
+	Dlib  Recognizer = "dlib"  // Howdy's: HOG or CNN detector, ResNet encoder
+	SFace Recognizer = "sface" // YuNet and SFace on ONNX Runtime
+)
+
 // Settings holds every value howdy-compare and the CLI read, with the
 // fallbacks the Python code ends up using
 type Settings struct {
@@ -13,7 +21,7 @@ type Settings struct {
 
 	// Recognizer is dlib (Howdy's) or sface (YuNet and SFace). MatchThreshold
 	// is sface's least cosine similarity for a match, certainty is dlib's.
-	Recognizer     string
+	Recognizer     Recognizer
 	MatchThreshold float64
 
 	Certainty         float64 // as written, compare divides it by 10
@@ -68,8 +76,8 @@ func Load(f *File) (*Settings, error) {
 	}
 
 	b(&s.UseCNN, "core", "use_cnn", false)
-	rec, err := f.String("core", "recognizer", "dlib")
-	s.Recognizer = rec
+	rec, err := f.String("core", "recognizer", string(Dlib))
+	s.Recognizer = Recognizer(rec)
 	errs = append(errs, err)
 	// SFace's own threshold in OpenCV Zoo (sface.py)
 	fl(&s.MatchThreshold, "video", "match_threshold", 0.363)
@@ -108,7 +116,7 @@ func Load(f *File) (*Settings, error) {
 	if s.DetectionUpsample < 0 || s.DetectionUpsample > 4 {
 		return nil, fmt.Errorf("[video] detection_upsample must be between 0 and 4, not %d", s.DetectionUpsample)
 	}
-	if s.Recognizer != "dlib" && s.Recognizer != "sface" {
+	if s.Recognizer != Dlib && s.Recognizer != SFace {
 		return nil, fmt.Errorf("[core] recognizer must be dlib or sface, not %q", s.Recognizer)
 	}
 	if !(s.MatchThreshold > 0 && s.MatchThreshold < 1) {

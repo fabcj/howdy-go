@@ -6,6 +6,7 @@
 package model
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"math"
@@ -92,26 +93,34 @@ func (d *decoder) value(depth int) (Value, error) {
 	if d.i >= len(d.s) {
 		return nil, d.errorf("unexpected end")
 	}
-	switch c := d.s[d.i]; {
-	case c == '{':
+	switch c := d.s[d.i]; c {
+	case '{':
 		return d.object(depth)
-	case c == '[':
+	case '[':
 		return d.array(depth)
-	case c == '"':
+	case '"':
 		return d.str()
-	case c == '-' || (c >= '0' && c <= '9'):
-		return d.number()
-	case strings.HasPrefix(d.s[d.i:], "true"):
-		d.i += 4
-		return true, nil
-	case strings.HasPrefix(d.s[d.i:], "false"):
-		d.i += 5
-		return false, nil
-	case strings.HasPrefix(d.s[d.i:], "null"):
-		d.i += 4
-		return nil, nil
+	case 't':
+		return d.literal("true", true)
+	case 'f':
+		return d.literal("false", false)
+	case 'n':
+		return d.literal("null", nil)
+	default:
+		if c == '-' || (c >= '0' && c <= '9') {
+			return d.number()
+		}
+		return nil, d.errorf("unexpected character %q", c)
 	}
-	return nil, d.errorf("unexpected character %q", d.s[d.i])
+}
+
+// literal consumes word and returns v
+func (d *decoder) literal(word string, v Value) (Value, error) {
+	if !strings.HasPrefix(d.s[d.i:], word) {
+		return nil, d.errorf("unexpected character %q", d.s[d.i])
+	}
+	d.i += len(word)
+	return v, nil
 }
 
 func (d *decoder) object(depth int) (Value, error) {
@@ -326,14 +335,14 @@ func (d *decoder) str() (string, error) {
 
 // Encode writes v like json.dumps(v) with default options
 func Encode(v Value) ([]byte, error) {
-	var b strings.Builder
+	var b bytes.Buffer
 	if err := encode(&b, v, 0); err != nil {
 		return nil, err
 	}
-	return []byte(b.String()), nil
+	return b.Bytes(), nil
 }
 
-func encode(b *strings.Builder, v Value, depth int) error {
+func encode(b *bytes.Buffer, v Value, depth int) error {
 	if depth > maxDepth {
 		return errors.New("nested too deep")
 	}
@@ -382,7 +391,7 @@ func encode(b *strings.Builder, v Value, depth int) error {
 }
 
 // Same escapes as Python's ensure_ascii, everything outside space to ~
-func encodeString(b *strings.Builder, s string) {
+func encodeString(b *bytes.Buffer, s string) {
 	const hex = "0123456789abcdef"
 	u := func(r rune) {
 		b.WriteString(`\u`)

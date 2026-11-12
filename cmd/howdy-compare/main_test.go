@@ -5,7 +5,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -21,14 +20,16 @@ const childEnv = "HOWDY_COMPARE_TEST_CHILD"
 
 func TestMain(m *testing.M) {
 	if dir := os.Getenv(childEnv); dir != "" {
-		paths.ConfigDir = filepath.Join(dir, "etc")
-		paths.UserModelsDir = filepath.Join(dir, "models")
-		paths.SFaceModelsDir = filepath.Join(dir, "models-sface")
-		paths.DlibDataDir = filepath.Join(dir, "no-dlib-data")
-		paths.ONNXDir = filepath.Join(dir, "no-onnx")
-		paths.ModelOwner = strconv.Itoa(os.Geteuid())
+		l := paths.Layout{
+			ConfigDir:      filepath.Join(dir, "etc"),
+			UserModelsDir:  filepath.Join(dir, "models"),
+			SFaceModelsDir: filepath.Join(dir, "models-sface"),
+			DlibDataDir:    filepath.Join(dir, "no-dlib-data"),
+			ONNXDir:        filepath.Join(dir, "no-onnx"),
+			ModelOwner:     os.Geteuid(),
+		}
 		os.Args = append([]string{"howdy-compare"}, os.Args[len(os.Args)-argCount():]...)
-		os.Exit(run())
+		os.Exit(run(l))
 	}
 	os.Exit(m.Run())
 }
@@ -71,7 +72,7 @@ func (e *env) model(t *testing.T) {
 	enc := make([]float64, model.EncodingSize)
 	m := model.NewModels(model.EncodingSize)
 	m.Entries = append(m.Entries, model.NewEntry(100, "test", 0, enc))
-	if err := model.Save(filepath.Join(e.dir, "models"), "alice", os.Getegid(), m); err != nil {
+	if err := model.Save(filepath.Join(e.dir, "models"), "alice", os.Geteuid(), m); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -106,7 +107,7 @@ func TestExitCodes(t *testing.T) {
 		{"no model file", func(t *testing.T, e *env) {}, []string{"alice"}, compare.NoFaceModel, ""},
 		{"model without encodings", func(t *testing.T, e *env) {
 			m := model.NewModels(model.EncodingSize)
-			if err := model.Save(filepath.Join(e.dir, "models"), "alice", os.Getegid(), m); err != nil {
+			if err := model.Save(filepath.Join(e.dir, "models"), "alice", os.Geteuid(), m); err != nil {
 				t.Fatal(err)
 			}
 		}, []string{"alice"}, compare.NoFaceModel, ""},

@@ -1,15 +1,14 @@
 package cli
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
 	"os"
-	"strings"
 
 	"golang.org/x/sys/unix"
 
-	"github.com/fabcj/howdy-go/internal/paths"
 	"github.com/fabcj/howdy-go/internal/pin"
 )
 
@@ -36,8 +35,8 @@ func (c *cmd) pin() int {
 		if lock {
 			break
 		}
-		c.pinStatus("PIN", "sudo and login managers", paths.PinDir)
-		c.pinStatus("lock screen PIN", "lock screens", paths.PinUserDir)
+		c.pinStatus("PIN", "sudo and login managers", c.Paths.PinDir)
+		c.pinStatus("lock screen PIN", "lock screens", c.Paths.PinUserDir)
 		return 0
 	}
 	c.say("Please say what to do with the PIN:")
@@ -71,6 +70,7 @@ func (c *cmd) pinSet(lock bool) int {
 	if err != nil {
 		return c.errorf("%v", err)
 	}
+	defer clear(first)
 	if !pin.Valid(first) {
 		return c.fail("A PIN is exactly 4 digits, nothing was changed")
 	}
@@ -81,7 +81,8 @@ func (c *cmd) pinSet(lock bool) int {
 	if err != nil {
 		return c.errorf("%v", err)
 	}
-	if first != second {
+	defer clear(second)
+	if !bytes.Equal(first, second) {
 		return c.fail("The two PINs differ, nothing was changed")
 	}
 	hash, err := pin.Hash(first)
@@ -100,11 +101,11 @@ func (c *cmd) pinSet(lock bool) int {
 		if err != nil {
 			return c.errorf("%v", err)
 		}
-		err = pin.SaveUser(paths.PinUserDir, c.user, hash, uid, gid)
+		err = pin.SaveUser(c.Paths.PinUserDir, c.user, hash, uid, gid)
 		if err != nil {
 			return c.errorf("%v", err)
 		}
-	} else if err := pin.Save(paths.PinDir, c.user, hash); err != nil {
+	} else if err := pin.Save(c.Paths.PinDir, c.user, hash); err != nil {
 		return c.errorf("%v", err)
 	}
 
@@ -121,9 +122,9 @@ func (c *cmd) pinSet(lock bool) int {
 }
 
 func (c *cmd) pinClear(lock bool) int {
-	dir, remove := paths.PinDir, pin.Remove
+	dir, remove := c.Paths.PinDir, pin.Remove
 	if lock {
-		dir, remove = paths.PinUserDir, pin.RemoveUser
+		dir, remove = c.Paths.PinUserDir, pin.RemoveUser
 	}
 	if !pin.Exists(dir, c.user) {
 		return c.fail("%s has no such PIN", c.user)
@@ -137,7 +138,7 @@ func (c *cmd) pinClear(lock bool) int {
 
 // weak says whether p is a PIN anyone would try first: one digit repeated,
 // an ascending or descending run, or a pair repeated
-func weak(p string) bool {
+func weak(p []byte) bool {
 	same, up, down := true, true, true
 	for i := 1; i < len(p); i++ {
 		if p[i] != p[0] {
@@ -150,44 +151,46 @@ func weak(p string) bool {
 			down = false
 		}
 	}
-	return same || up || down || p[:2] == p[2:]
+	return same || up || down || bytes.Equal(p[:2], p[2:])
 }
 
 // TerminalSecret reads a line from the terminal in without showing it, and
 // refuses anything that isn't a terminal, so a PIN never comes from a pipe
-// or a script's arguments
-func TerminalSecret(in *os.File, out io.Writer) func(string) (string, error) {
-	return func(prompt string) (string, error) {
+// or a script's arguments. The caller clears the slice when it's done.
+func TerminalSecret(in *os.File, out io.Writer) func(string) ([]byte, error) {
+	return func(prompt string) ([]byte, error) {
 		fd := int(in.Fd())
 		old, err := unix.IoctlGetTermios(fd, unix.TCGETS)
 		if err != nil {
-			return "", errors.New("run this in a terminal, the PIN is typed without echo")
+			return nil, errors.New("run this in a terminal, the PIN is typed without echo")
 		}
 		quiet := *old
 		quiet.Lflag &^= unix.ECHO
 		if err := unix.IoctlSetTermios(fd, unix.TCSETSF, &quiet); err != nil {
-			return "", err
+			return nil, err
 		}
 		defer func() {
 			_ = unix.IoctlSetTermios(fd, unix.TCSETSF, old)
 			fmt.Fprintln(out)
 		}()
 		fmt.Fprint(out, prompt)
-		var b strings.Builder
+		line := make([]byte, 0, 8)
 		buf := make([]byte, 1)
 		for {
 			n, err := in.Read(buf)
 			if n == 1 {
 				if buf[0] == '\n' || buf[0] == '\r' {
-					return b.String(), nil
+					return line, nil
 				}
-				if b.Len() > 64 {
-					return "", errors.New("that's not a PIN")
+				if len(line) > 64 {
+					clear(line)
+					return nil, errors.New("that's not a PIN")
 				}
-				b.WriteByte(buf[0])
+				line = append(line, buf[0])
 			}
 			if err != nil {
-				return "", err
+				clear(line)
+				return nil, err
 			}
 		}
 	}

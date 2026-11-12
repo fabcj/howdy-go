@@ -3,6 +3,7 @@ package cli
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -98,7 +99,7 @@ func parse(argv []string, defaultUser string) (*args, error) {
 		return nil, usageError("the following arguments are required: command")
 	}
 	a.command = runs[0][0]
-	if !contains(commands, a.command) {
+	if !slices.Contains(commands, a.command) {
 		quoted := make([]string, len(commands))
 		for i, c := range commands {
 			quoted[i] = "'" + c + "'"
@@ -119,13 +120,4 @@ func parse(argv []string, defaultUser string) (*args, error) {
 		return nil, usageError("unrecognized arguments: " + strings.Join(unknown, " "))
 	}
 	return a, nil
-}
-
-func contains(list []string, s string) bool {
-	for _, v := range list {
-		if v == s {
-			return true
-		}
-	}
-	return false
 }

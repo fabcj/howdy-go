@@ -124,19 +124,6 @@ func TestRefused(t *testing.T) {
 	}
 }
 
-func TestValidUser(t *testing.T) {
-	for _, ok := range []string{"alice", "_x", "a-b_c1", "machine$", strings.Repeat("a", 32)} {
-		if !ValidUser(ok) {
-			t.Errorf("%q refused", ok)
-		}
-	}
-	for _, bad := range []string{"", "../x", "a/b", "Root", "1a", "a b", "x.dat", strings.Repeat("a", 33), "a$b"} {
-		if ValidUser(bad) {
-			t.Errorf("%q accepted", bad)
-		}
-	}
-}
-
 func TestStore(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.Chmod(dir, 0o755); err != nil {
@@ -151,7 +138,7 @@ func TestStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := Save(dir, "alice", os.Getgid(), m); err != nil {
+	if err := Save(dir, "alice", os.Getuid(), m); err != nil {
 		t.Fatal(err)
 	}
 	st, err := os.Stat(filepath.Join(dir, "alice.dat"))
@@ -163,6 +150,12 @@ func TestStore(t *testing.T) {
 	}
 	if _, err := Load(dir, "alice", me+1); err == nil {
 		t.Error("loaded a model owned by someone else")
+	}
+	// Read access goes to the one uid through the ACL, not to a group
+	acl := make([]byte, 256)
+	n, err := unix.Getxattr(filepath.Join(dir, "alice.dat"), "system.posix_acl_access", acl)
+	if err != nil || !bytes.Equal(acl[:n], userReadACL(me)) {
+		t.Errorf("ACL %x, %v; want %x", acl[:max(n, 0)], err, userReadACL(me))
 	}
 
 	// A symlink in place of the model is refused
@@ -189,7 +182,7 @@ func TestStore(t *testing.T) {
 	if err := os.Symlink(target, filepath.Join(dir, "carol.dat.tmp")); err != nil {
 		t.Fatal(err)
 	}
-	if err := Save(dir, "carol", os.Getgid(), m); err != nil {
+	if err := Save(dir, "carol", os.Getuid(), m); err != nil {
 		t.Fatal(err)
 	}
 	if b, _ := os.ReadFile(target); string(b) != "keep" {

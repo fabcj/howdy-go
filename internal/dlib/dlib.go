@@ -54,7 +54,7 @@ func Load(hogPath, cnnPath, shapePath, encoderPath string, useCNN bool, upsample
 	}()
 
 	var err error
-	m.do(func() {
+	_ = m.do(func() {
 		m.f = C.hd_new()
 		if m.f == nil {
 			err = errors.New("out of memory")
@@ -95,13 +95,21 @@ func Load(hogPath, cnnPath, shapePath, encoderPath string, useCNN bool, upsample
 	return m, nil
 }
 
-func (m *Models) do(fn func()) {
+var errClosed = errors.New("dlib models are closed")
+
+// do runs fn on the model thread. It reports errClosed after Close, when
+// sending on the nil channel would block forever.
+func (m *Models) do(fn func()) error {
+	if m.calls == nil {
+		return errClosed
+	}
 	done := make(chan struct{})
 	m.calls <- func() {
 		fn()
 		close(done)
 	}
 	<-done
+	return nil
 }
 
 // Close frees the models
@@ -109,7 +117,7 @@ func (m *Models) Close() {
 	if m.calls == nil {
 		return
 	}
-	m.do(func() {
+	_ = m.do(func() {
 		if m.f != nil {
 			C.hd_free(m.f)
 			m.f = nil
@@ -134,9 +142,9 @@ func (m *Models) DetectWith(g *imgproc.Gray, upsample int, useCNN bool) ([]face.
 	}
 	var out []face.Rect
 	var err error
-	m.do(func() {
-		rects := make([]C.long, maxFaces*4)
-		buf := make([]C.char, C.HD_ERRLEN)
+	if err := m.do(func() {
+		var rects [maxFaces * 4]C.long
+		var buf [C.HD_ERRLEN]C.char
 		cnn := C.int(0)
 		if useCNN {
 			cnn = 1
@@ -144,16 +152,18 @@ func (m *Models) DetectWith(g *imgproc.Gray, upsample int, useCNN bool) ([]face.
 		n := C.hd_detect(m.f, (*C.uint8_t)(unsafe.Pointer(&g.Pix[0])), C.int(g.W), C.int(g.H),
 			C.int(upsample), cnn, &rects[0], maxFaces, &buf[0])
 		if n < 0 {
-			err = errorFrom(buf)
+			err = errorFrom(buf[:])
 			return
 		}
-		for i := 0; i < int(n) && i < maxFaces; i++ {
+		for i := range min(int(n), maxFaces) {
 			out = append(out, face.Rect{
 				Left: int(rects[i*4]), Top: int(rects[i*4+1]),
 				Right: int(rects[i*4+2]), Bottom: int(rects[i*4+3]),
 			})
 		}
-	})
+	}); err != nil {
+		return nil, err
+	}
 	return out, err
 }
 
@@ -164,14 +174,14 @@ func (m *Models) Encode(g *imgproc.Gray, r face.Rect) (face.Encoding, error) {
 		return enc, errors.New("empty image")
 	}
 	var err error
-	m.do(func() {
-		rect := []C.long{C.long(r.Left), C.long(r.Top), C.long(r.Right), C.long(r.Bottom)}
-		parts := make([]C.long, 10)
-		desc := make([]C.double, 128)
-		buf := make([]C.char, C.HD_ERRLEN)
+	if err := m.do(func() {
+		rect := [4]C.long{C.long(r.Left), C.long(r.Top), C.long(r.Right), C.long(r.Bottom)}
+		var parts [10]C.long
+		var desc [128]C.double
+		var buf [C.HD_ERRLEN]C.char
 		if C.hd_encode(m.f, (*C.uint8_t)(unsafe.Pointer(&g.Pix[0])), C.int(g.W), C.int(g.H),
 			&rect[0], &desc[0], &parts[0], &buf[0]) < 0 {
-			err = errorFrom(buf)
+			err = errorFrom(buf[:])
 			return
 		}
 		for i := range enc.Descriptor {
@@ -180,7 +190,9 @@ func (m *Models) Encode(g *imgproc.Gray, r face.Rect) (face.Encoding, error) {
 		for i := range enc.Parts {
 			enc.Parts[i] = [2]int{int(parts[i*2]), int(parts[i*2+1])}
 		}
-	})
+	}); err != nil {
+		return enc, err
+	}
 	return enc, err
 }
 
@@ -189,9 +201,9 @@ func (m *Models) Encode(g *imgproc.Gray, r face.Rect) (face.Encoding, error) {
 func SaveFrontalDetector(path string) error {
 	cpath := C.CString(path)
 	defer C.free(unsafe.Pointer(cpath))
-	buf := make([]C.char, C.HD_ERRLEN)
+	var buf [C.HD_ERRLEN]C.char
 	if C.hd_save_frontal(cpath, &buf[0]) < 0 {
-		return errorFrom(buf)
+		return errorFrom(buf[:])
 	}
 	return nil
 }

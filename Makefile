@@ -27,16 +27,16 @@ DATADIR ?= $(PREFIX)/share
 # Where the programs look for their files, see internal/paths
 CONFIGDIR ?= $(SYSCONFDIR)/howdy
 PATHS := \
-	ConfigDir=$(CONFIGDIR) \
-	UserModelsDir=$(CONFIGDIR)/models \
-	SFaceModelsDir=$(CONFIGDIR)/models-sface \
-	PinDir=$(CONFIGDIR)/pin \
-	PinUserDir=$(CONFIGDIR)/pin-user \
-	DlibDataDir=$(DATADIR)/dlib-data \
-	ONNXDir=$(DATADIR)/howdy-go/onnx \
-	DataDir=$(DATADIR)/howdy \
-	LogPath=$(LOCALSTATEDIR)/log/howdy \
-	ModelOwner=0
+	configDir=$(CONFIGDIR) \
+	userModelsDir=$(CONFIGDIR)/models \
+	sfaceModelsDir=$(CONFIGDIR)/models-sface \
+	pinDir=$(CONFIGDIR)/pin \
+	pinUserDir=$(CONFIGDIR)/pin-user \
+	dlibDataDir=$(DATADIR)/dlib-data \
+	onnxDir=$(DATADIR)/howdy-go/onnx \
+	dataDir=$(DATADIR)/howdy \
+	logPath=$(LOCALSTATEDIR)/log/howdy \
+	modelOwner=0
 
 FLAGS ?= -buildmode=pie -trimpath -mod=readonly -modcacherw
 GO_LDFLAGS := -linkmode=external \
@@ -88,6 +88,7 @@ check-hardening:
 install:
 	install -Dm755 bin/howdy -t $(DESTDIR)$(BINDIR)
 	install -Dm755 bin/howdy-compare -t $(DESTDIR)$(LIBEXECDIR)
+	install -Dm644 packaging/sysusers.d/howdy-go.conf $(DESTDIR)$(PREFIX)/lib/sysusers.d/howdy-go.conf
 
 clean:
 	rm -rf bin

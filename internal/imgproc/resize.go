@@ -68,9 +68,7 @@ func ShrinkArea(g *Gray, f float64) *Gray {
 			flush(prevDy)
 		}
 		prevDy = yt.di
-		for x := range buf {
-			buf[x] = 0
-		}
+		clear(buf)
 		row := g.Pix[yt.si*g.W:]
 		for _, xt := range xtab {
 			buf[xt.di] += float32(row[xt.si]) * xt.alpha

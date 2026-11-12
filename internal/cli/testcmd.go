@@ -3,12 +3,11 @@ package cli
 import (
 	"errors"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/fabcj/howdy-go/internal/backend"
-	"github.com/fabcj/howdy-go/internal/compare"
 	"github.com/fabcj/howdy-go/internal/config"
 	"github.com/fabcj/howdy-go/internal/face"
 	"github.com/fabcj/howdy-go/internal/imgproc"
@@ -23,7 +22,7 @@ func (c *cmd) test() int {
 	if err != nil {
 		return c.errorf("%v", err)
 	}
-	if msg := backend.MissingData(s.Recognizer); msg != "" {
+	if msg := backend.MissingData(c.Paths, s.Recognizer); msg != "" {
 		c.say(msg)
 		return 1
 	}
@@ -39,7 +38,7 @@ func (c *cmd) test() int {
 	case err != nil:
 		return c.errorf("%v", err)
 	default:
-		known, owner, err = backend.Known(s, c.user, m)
+		known, owner, err = backend.Known(c.Paths, s, c.user, m)
 		if errors.Is(err, backend.ErrNotEnrolled) {
 			c.printf("No sface model for %s yet (run howdy add), only showing detection\n", c.user)
 		} else if err != nil {
@@ -49,15 +48,9 @@ func (c *cmd) test() int {
 			labels = append(labels, model.Label(e))
 		}
 	}
-	certainty := compare.Threshold(s)
-	sim := s.Recognizer == "sface"
-	// What's shown for a distance: certainty for dlib, similarity for sface
-	shown := func(d float64) float64 {
-		if sim {
-			return face.Cosine(d)
-		}
-		return d * 10
-	}
+	match := backend.MatcherFor(s)
+	certainty, shown := match.Threshold, match.Shown
+	sim := s.Recognizer == config.SFace
 
 	faces, err := c.Faces(s, s.Recognizer)
 	if err != nil {
@@ -178,8 +171,8 @@ func (st *testStats) report(c *cmd, took time.Duration, s *config.Settings) {
 	if len(st.dists) == 0 {
 		return
 	}
-	d := append([]float64(nil), st.dists...)
-	sort.Float64s(d)
+	d := slices.Clone(st.dists)
+	slices.Sort(d)
 	median := d[len(d)/2]
 	if len(d)%2 == 0 {
 		median = (d[len(d)/2-1] + d[len(d)/2]) / 2
@@ -187,7 +180,7 @@ func (st *testStats) report(c *cmd, took time.Duration, s *config.Settings) {
 	// A median close to the threshold means most frames miss, and each
 	// miss costs a frame of unlock time
 	close, knob := false, "raising certainty"
-	if s.Recognizer == "sface" {
+	if s.Recognizer == config.SFace {
 		knob = "lowering match_threshold"
 		c.printf("Similarity: best %.3f, median %.3f, %d of %d faces over %g\n",
 			face.Cosine(d[0]), face.Cosine(median), st.matches, len(d), s.MatchThreshold)

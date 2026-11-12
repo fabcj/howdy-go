@@ -61,16 +61,18 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
 
-	"github.com/fabcj/howdy-go/internal/model"
+	"github.com/fabcj/howdy-go/internal/username"
 )
 
 // Length is how many digits a PIN has
@@ -81,21 +83,36 @@ const Length = 4
 // the PAM module (pam-pin.patch), which keeps the count.
 const MaxFails = 6
 
-// Valid says whether s is a PIN: exactly 4 ASCII digits
-func Valid(s string) bool {
+// Valid says whether s is a PIN: exactly 4 ASCII digits. PINs are byte
+// slices, not strings, so every copy can be cleared once it's used.
+func Valid(s []byte) bool {
 	if len(s) != Length {
 		return false
 	}
-	for i := 0; i < len(s); i++ {
-		if s[i] < '0' || s[i] > '9' {
+	for _, c := range s {
+		if c < '0' || c > '9' {
 			return false
 		}
 	}
 	return true
 }
 
+// cstring copies s into C memory with a NUL after it. The returned function
+// clears and frees the copy.
+func cstring(s []byte) (*C.char, func()) {
+	n := C.size_t(len(s) + 1)
+	p := C.malloc(n)
+	buf := unsafe.Slice((*byte)(p), len(s)+1)
+	copy(buf, s)
+	buf[len(s)] = 0
+	return (*C.char)(p), func() {
+		C.explicit_bzero(p, n)
+		C.free(p)
+	}
+}
+
 // Hash returns a yescrypt hash of the PIN, as crypt(3) writes it
-func Hash(pin string) (string, error) {
+func Hash(pin []byte) (string, error) {
 	if !Valid(pin) {
 		return "", errors.New("a PIN is exactly 4 digits")
 	}
@@ -103,8 +120,8 @@ func Hash(pin string) (string, error) {
 	if _, err := rand.Read(rnd); err != nil {
 		return "", err
 	}
-	cpin := C.CString(pin)
-	defer C.free(unsafe.Pointer(cpin))
+	cpin, done := cstring(pin)
+	defer done()
 	out := make([]C.char, C.CRYPT_OUTPUT_SIZE)
 	if C.hd_pin_hash(cpin, (*C.uchar)(unsafe.Pointer(&rnd[0])), C.int(len(rnd)), &out[0], C.int(len(out))) != 0 {
 		return "", errors.New("libcrypt can't make a yescrypt hash")
@@ -117,19 +134,20 @@ func Hash(pin string) (string, error) {
 }
 
 // Verify says whether pin is the PIN hash was made from
-func Verify(pin, hash string) bool {
+func Verify(pin []byte, hash string) bool {
 	if !Valid(pin) || !strings.HasPrefix(hash, "$y$") {
 		return false
 	}
-	cpin, chash := C.CString(pin), C.CString(hash)
-	defer C.free(unsafe.Pointer(cpin))
+	cpin, done := cstring(pin)
+	defer done()
+	chash := C.CString(hash)
 	defer C.free(unsafe.Pointer(chash))
 	return C.hd_pin_check(cpin, chash) == 1
 }
 
 // Path is where a user's PIN hash lives
 func Path(dir, user string) (string, error) {
-	if !model.ValidUser(user) {
+	if !username.Valid(user) {
 		return "", fmt.Errorf("%q isn't a valid username", user)
 	}
 	return filepath.Join(dir, user), nil
@@ -199,11 +217,10 @@ func writeOwned(path, data string, uid, gid int) error {
 	if err := unix.Unlink(tmp); err != nil && !errors.Is(err, unix.ENOENT) {
 		return &fs.PathError{Op: "unlink", Path: tmp, Err: err}
 	}
-	fd, err := unix.Open(tmp, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0o600)
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL|unix.O_NOFOLLOW, 0o600)
 	if err != nil {
-		return &fs.PathError{Op: "open", Path: tmp, Err: err}
+		return err
 	}
-	f := os.NewFile(uintptr(fd), tmp)
 	ok := false
 	defer func() {
 		if !ok {
@@ -212,11 +229,11 @@ func writeOwned(path, data string, uid, gid int) error {
 		}
 	}()
 	if unix.Geteuid() == 0 {
-		if err := unix.Fchown(fd, uid, gid); err != nil {
+		if err := f.Chown(uid, gid); err != nil {
 			return err
 		}
 	}
-	if err := unix.Fchmod(fd, 0o600); err != nil {
+	if err := f.Chmod(0o600); err != nil {
 		return err
 	}
 	if _, err := f.WriteString(data); err != nil {
@@ -316,23 +333,22 @@ func Load(dir, user string, owner int) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
+	f, err := os.OpenFile(path, os.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
 	if err != nil {
-		return "", &fs.PathError{Op: "open", Path: path, Err: err}
-	}
-	f := os.NewFile(uintptr(fd), path)
-	defer f.Close()
-	var st unix.Stat_t
-	if err := unix.Fstat(fd, &st); err != nil {
 		return "", err
 	}
-	if st.Mode&unix.S_IFMT != unix.S_IFREG || int(st.Uid) != owner || st.Mode&0o077 != 0 {
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return "", err
+	}
+	st := fi.Sys().(*syscall.Stat_t)
+	if !fi.Mode().IsRegular() || int(st.Uid) != owner || fi.Mode().Perm()&0o077 != 0 {
 		return "", fmt.Errorf("%s must be a regular file owned by uid %d that only it can access", path, owner)
 	}
-	buf := make([]byte, 1024)
-	n, err := f.Read(buf)
+	data, err := io.ReadAll(io.LimitReader(f, 1024))
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimSpace(string(buf[:n])), nil
+	return strings.TrimSpace(string(data)), nil
 }

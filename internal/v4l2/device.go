@@ -1,3 +1,5 @@
+//go:build linux && amd64
+
 package v4l2
 
 import (
@@ -63,8 +65,8 @@ func (d *fileDevice) Wait(timeout time.Duration) (bool, error) {
 		if ms < 0 {
 			return false, nil
 		}
-		fds := []unix.PollFd{{Fd: int32(d.fd), Events: unix.POLLIN}}
-		n, err := unix.Poll(fds, ms)
+		fds := [1]unix.PollFd{{Fd: int32(d.fd), Events: unix.POLLIN}}
+		n, err := unix.Poll(fds[:], ms)
 		if errors.Is(err, unix.EINTR) {
 			continue
 		}

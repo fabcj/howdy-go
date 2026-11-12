@@ -6,6 +6,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"image"
 	"os"
 	"time"
 
@@ -21,6 +22,7 @@ import (
 	"github.com/fabcj/howdy-go/internal/model"
 	"github.com/fabcj/howdy-go/internal/paths"
 	"github.com/fabcj/howdy-go/internal/snapshot"
+	"github.com/fabcj/howdy-go/internal/username"
 )
 
 // Generous caps that still stop a runaway. The CNN detector at upsample 1
@@ -31,7 +33,7 @@ const (
 )
 
 func main() {
-	os.Exit(run())
+	os.Exit(run(paths.Installed()))
 }
 
 func fail(code int, format string, args ...any) int {
@@ -39,7 +41,8 @@ func fail(code int, format string, args ...any) int {
 	return code
 }
 
-func run() int {
+// run is howdy-compare with the given install layout
+func run(l paths.Layout) int {
 	start := time.Now()
 	if err := harden.CheckNoNewPrivs(); err != nil {
 		return fail(compare.Abort, "%v", err)
@@ -49,12 +52,12 @@ func run() int {
 		return compare.Abort
 	}
 	user := os.Args[1]
-	if !model.ValidUser(user) {
+	if !username.Valid(user) {
 		return fail(compare.Abort, "invalid username")
 	}
 
 	// The model comes first, like compare.py, so a missing one is always 10
-	models, err := model.Load(paths.UserModelsDir, user, paths.ModelOwnerUID())
+	models, err := model.Load(l.UserModelsDir, user, l.ModelOwner)
 	if errors.Is(err, model.ErrNoModel) {
 		return compare.NoFaceModel
 	}
@@ -71,7 +74,7 @@ func run() int {
 		labels[i] = model.Label(e)
 	}
 
-	file, err := config.Read(paths.ConfigFile())
+	file, err := config.Read(l.ConfigFile())
 	if err != nil {
 		return fail(compare.Abort, "%v", err)
 	}
@@ -90,7 +93,7 @@ func run() int {
 
 	// With sface, only its descriptors for models the .dat file still lists.
 	// None means the password, not falling back to dlib
-	known, owner, err := backend.Known(s, user, models)
+	known, owner, err := backend.Known(l, s, user, models)
 	if errors.Is(err, backend.ErrNotEnrolled) {
 		return fail(compare.NoFaceModel, "%v", err)
 	}
@@ -103,14 +106,12 @@ func run() int {
 
 	if _, err := os.Stat(s.DevicePath); err != nil {
 		if s.WarnNoDevice {
-			fmt.Println("Howdy could not find a camera device at the path specified in the config file.")
-			fmt.Println("It is very likely that the path is not configured correctly, please edit the 'device_path' config value by running:")
-			fmt.Print("\n\tsudo howdy config\n\n")
+			fmt.Print(backend.NoDeviceText, "\n")
 		}
 		return compare.BadDevice
 	}
 
-	if msg := backend.MissingData(s.Recognizer); msg != "" {
+	if msg := backend.MissingData(l, s.Recognizer); msg != "" {
 		fmt.Println(msg)
 		return compare.Abort
 	}
@@ -131,7 +132,7 @@ func run() int {
 	}()
 
 	t := time.Now()
-	faces, faceErr := loader.Load(s, s.Recognizer)
+	faces, faceErr := loader.Load(l, s, s.Recognizer)
 	modelsTook := time.Since(t)
 	cr := <-camDone
 
@@ -151,17 +152,34 @@ func run() int {
 	if unix.Geteuid() == 0 {
 		// Started by sudo and the like: nothing past this point needs root.
 		// Writing a snapshot would, so those are off here
-		uid, gid, err := harden.Nobody()
+		uid, gid, name, err := harden.Unprivileged()
 		if err != nil {
 			return fail(compare.Abort, "%v", err)
 		}
 		if err := harden.Drop(uid, gid); err != nil {
-			return fail(compare.Abort, "dropping root failed: %v", err)
+			return fail(compare.Abort, "dropping root to %s failed: %v", name, err)
 		}
 		if snapshots {
 			fmt.Fprintln(os.Stderr, "howdy-compare: snapshots aren't saved when started as root")
 			snapshots = false
 		}
+	}
+
+	// Everything the loop needs is open or in memory now: the camera, the
+	// models, the config. Read the logo too, then shut the filesystem.
+	var logo image.Image
+	snapshotDir := ""
+	if snapshots {
+		logo = snapshot.LoadLogo(l.Logo())
+		snapshotDir = l.SnapshotsDir()
+		// Made now, so it's there for the rule; as root it isn't needed
+		_ = os.MkdirAll(snapshotDir, 0o750)
+	}
+	if err := harden.LockFilesystem(snapshotDir, harden.SnapshotAccess); err != nil {
+		if !errors.Is(err, harden.ErrNoLandlock) {
+			return fail(compare.Abort, "%v", err)
+		}
+		fmt.Fprintln(os.Stderr, "howdy-compare: no Landlock in this kernel, the frame loop keeps filesystem access")
 	}
 
 	var uts unix.Utsname
@@ -174,18 +192,18 @@ func run() int {
 		Labels:   labels,
 		Camera:   cr.cam,
 		Faces:    faces,
+		Match:    backend.MatcherFor(s),
 		Out:      os.Stdout,
 		Hostname: unix.ByteSliceToString(uts.Nodename[:]),
 		Timings:  compare.Timings{Start: start, Startup: startup, Camera: cr.took, Models: modelsTook},
 	}
 	if snapshots {
-		logo := snapshot.LoadLogo(paths.Logo())
 		loop.Snapshot = func(frames []*imgproc.Gray, lines []string) {
 			img, err := snapshot.Build(frames, lines, logo)
 			if err != nil {
 				return
 			}
-			_, _ = snapshot.Save(paths.SnapshotsDir(), time.Now(), img)
+			_, _ = snapshot.Save(l.SnapshotsDir(), time.Now(), img)
 		}
 	}
 	return loop.Run()

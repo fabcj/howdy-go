@@ -11,17 +11,17 @@ import (
 // EncodingSize is the length of a dlib face descriptor
 const EncodingSize = 128
 
-// Models is the whole file: a list of entries in file order
-type Models struct {
-	Entries []*Object
-	size    int // encoding length, EncodingSize when 0
+// Entry is one model: the JSON object as read, for writing it back byte
+// for byte, and its encodings parsed once
+type Entry struct {
+	*Object
+	Encodings [][]float64
 }
 
-func (m *Models) encodingSize() int {
-	if m.size == 0 {
-		return EncodingSize
-	}
-	return m.size
+// Models is the whole file: a list of entries in file order
+type Models struct {
+	Entries []*Entry
+	size    int // encoding length, EncodingSize when 0
 }
 
 // Parse reads a model file, checking every entry has a usable "data" list
@@ -45,10 +45,11 @@ func ParseSize(data []byte, size int) (*Models, error) {
 		if !ok {
 			return nil, fmt.Errorf("model %d isn't an object", i)
 		}
-		if _, err := encodings(o, size); err != nil {
+		encs, err := encodings(o, size)
+		if err != nil {
 			return nil, fmt.Errorf("model %d: %w", i, err)
 		}
-		m.Entries = append(m.Entries, o)
+		m.Entries = append(m.Entries, &Entry{Object: o, Encodings: encs})
 	}
 	return m, nil
 }
@@ -57,7 +58,7 @@ func ParseSize(data []byte, size int) (*Models, error) {
 func (m *Models) Bytes() ([]byte, error) {
 	list := make([]Value, len(m.Entries))
 	for i, e := range m.Entries {
-		list[i] = e
+		list[i] = e.Object
 	}
 	return Encode(list)
 }
@@ -104,8 +105,7 @@ func encodings(o *Object, size int) ([][]float64, error) {
 // compare.py matches against the flattened list
 func (m *Models) Flat() (encs [][]float64, owner []int) {
 	for i, e := range m.Entries {
-		list, _ := encodings(e, m.encodingSize())
-		for _, enc := range list {
+		for _, enc := range e.Encodings {
 			encs = append(encs, enc)
 			owner = append(owner, i)
 		}
@@ -114,8 +114,8 @@ func (m *Models) Flat() (encs [][]float64, owner []int) {
 }
 
 // Label is an entry's label as Python's str() would show it
-func Label(o *Object) string {
-	return Str(o.Values["label"])
+func Label(e *Entry) string {
+	return Str(e.Values["label"])
 }
 
 // Str formats a value the way Python's str() does for what models hold
@@ -155,8 +155,8 @@ func (m *Models) NextID() (int64, error) {
 }
 
 // ID is an entry's "id", when it's a whole number
-func ID(o *Object) (int64, bool) {
-	v, ok := o.Get("id")
+func ID(e *Entry) (int64, bool) {
+	v, ok := e.Get("id")
 	if !ok {
 		return 0, false
 	}
@@ -169,12 +169,12 @@ func ID(o *Object) (int64, bool) {
 // howdy add stamped on both doesn't
 type key struct{ id, time int64 }
 
-func keyOf(o *Object) (key, bool) {
-	id, ok := ID(o)
+func keyOf(e *Entry) (key, bool) {
+	id, ok := ID(e)
 	if !ok {
 		return key{}, false
 	}
-	v, ok := o.Get("time")
+	v, ok := e.Get("time")
 	if !ok {
 		return key{}, false
 	}
@@ -213,8 +213,7 @@ func (m *Models) Enrolled(enrolled *Models, encoder string) (encs [][]float64, o
 		if !ok {
 			continue
 		}
-		list, _ := encodings(e, m.encodingSize())
-		for _, enc := range list {
+		for _, enc := range e.Encodings {
 			encs = append(encs, enc)
 			owner = append(owner, i)
 		}
@@ -238,7 +237,7 @@ func (m *Models) Prune(enrolled *Models) {
 }
 
 // NewEntry builds an entry with the key order howdy add writes
-func NewEntry(time int64, label string, id int64, enc []float64) *Object {
+func NewEntry(time int64, label string, id int64, enc []float64) *Entry {
 	vec := make([]Value, len(enc))
 	for i, f := range enc {
 		vec[i] = f
@@ -248,15 +247,15 @@ func NewEntry(time int64, label string, id int64, enc []float64) *Object {
 	o.Set("label", label)
 	o.Set("id", Int(id))
 	o.Set("data", []Value{vec})
-	return o
+	return &Entry{Object: o, Encodings: [][]float64{enc}}
 }
 
 // NewTaggedEntry is NewEntry with the encoder that made enc, for backends
 // other than dlib
-func NewTaggedEntry(time int64, label string, id int64, enc []float64, encoder string) *Object {
-	o := NewEntry(time, label, id, enc)
-	o.Set("encoder", encoder)
-	return o
+func NewTaggedEntry(time int64, label string, id int64, enc []float64, encoder string) *Entry {
+	e := NewEntry(time, label, id, enc)
+	e.Set("encoder", encoder)
+	return e
 }
 
 // NewModels is an empty file of encodings size long
