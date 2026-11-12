@@ -720,89 +720,9 @@ func (c *cmd) add() int {
 	c.say("\nPlease look straight into the camera")
 	c.Sleep(2 * time.Second)
 
-	// Throw away what the camera buffered while we waited, and give its
-	// exposure a moment to settle. The first frames are often brighter or
-	// stale, and a model built from one of them matches the user badly
-	settle := c.Now().Add(500 * time.Millisecond)
-	for c.Now().Before(settle) {
-		if _, code := c.readFrame(cam); code != 0 {
-			return code
-		}
-	}
-
-	var encs, extraEncs [][]float64
-	frames, valid, darkTries := 0, 0, 0
-	var darkTotal float32
-	more := func() bool {
-		return len(encs) < s.EnrollFrames || extra != nil && len(extraEncs) < s.EnrollFrames
-	}
-	for more() && frames < 60+s.EnrollFrames*6 {
-		frames++
-		raw, code := c.readFrame(cam)
-		if code != 0 {
-			return code
-		}
-		gs := imgproc.CLAHE(raw, 2.0, 8, 8)
-		darkness, total := imgproc.Darkness(gs)
-		if total == 0 || darkness == 100 {
-			continue
-		}
-		darkTotal += darkness
-		valid++
-		if float64(darkness) > s.DarkThreshold {
-			darkTries++
-			continue
-		}
-
-		rects, err := faces.Detect(gs)
-		if err != nil {
-			return c.errorf("face detection failed: %v", err)
-		}
-		var extraRects []face.Rect
-		if extra != nil {
-			if extraRects, err = extra.Detect(gs); err != nil {
-				return c.errorf("face detection failed: %v", err)
-			}
-		}
-		// Either detector seeing two faces stops it
-		if len(rects) > 1 || len(extraRects) > 1 {
-			closeCam()
-			return c.fail("Multiple faces detected, aborting")
-		}
-		if len(rects) == 1 && len(encs) < s.EnrollFrames {
-			enc, err := faces.Encode(raw, rects[0])
-			if err != nil {
-				return c.errorf("face encoding failed: %v", err)
-			}
-			encs = append(encs, enc.Descriptor)
-		}
-		if len(extraRects) == 1 && len(extraEncs) < s.EnrollFrames {
-			enc, err := extra.Encode(raw, extraRects[0])
-			if err != nil {
-				return c.errorf("face encoding failed: %v", err)
-			}
-			extraEncs = append(extraEncs, enc.Descriptor)
-		}
-	}
-	closeCam()
-
-	if len(encs) == 0 {
-		switch valid {
-		case 0:
-			c.say("Camera saw only black frames - is IR emitter working?")
-		case darkTries:
-			c.say("All frames were too dark, please check dark_threshold in config")
-			c.printf("Average darkness: %s, Threshold: %s\n", pyfmt.Float32(darkTotal/float32(valid)), pyfmt.Float(s.DarkThreshold))
-		default:
-			c.say("No face detected, aborting")
-		}
-		return 1
-	}
-	if len(encs) < min(3, s.EnrollFrames) {
-		return c.fail("Only saw a face in %d frames, please hold still and try again", len(encs))
-	}
-	if extra != nil && len(extraEncs) < min(3, s.EnrollFrames) {
-		return c.fail("%s only saw a face in %d frames, please hold still and try again", s.Recognizer, len(extraEncs))
+	encs, extraEncs, code := c.enrol(cam, closeCam, faces, extra, s)
+	if code != 0 {
+		return code
 	}
 
 	r, err := enroll.Average(encs)
@@ -824,6 +744,98 @@ func (c *cmd) add() int {
 	}
 	c.say("\nScan complete\nAdded a new model to " + c.user)
 	return 0
+}
+
+// enrol reads frames until each recogniser has EnrollFrames descriptors or
+// the frame budget runs out. It closes the camera when it's done, and
+// returns a non-zero exit code with the message already printed when too
+// few frames had exactly one face.
+func (c *cmd) enrol(cam compare.Camera, closeCam func(), faces, extra face.Recognizer, s *config.Settings) (encs, extraEncs [][]float64, code int) {
+	// Throw away what the camera buffered while we waited, and give its
+	// exposure a moment to settle. The first frames are often brighter or
+	// stale, and a model built from one of them matches the user badly
+	settle := c.Now().Add(500 * time.Millisecond)
+	for c.Now().Before(settle) {
+		if _, code := c.readFrame(cam); code != 0 {
+			return nil, nil, code
+		}
+	}
+
+	frames, valid, darkTries := 0, 0, 0
+	var darkTotal float32
+	more := func() bool {
+		return len(encs) < s.EnrollFrames || extra != nil && len(extraEncs) < s.EnrollFrames
+	}
+	for more() && frames < 60+s.EnrollFrames*6 {
+		frames++
+		raw, code := c.readFrame(cam)
+		if code != 0 {
+			return nil, nil, code
+		}
+		gs := imgproc.CLAHE(raw, 2.0, 8, 8)
+		darkness, total := imgproc.Darkness(gs)
+		if total == 0 || darkness == 100 {
+			continue
+		}
+		darkTotal += darkness
+		valid++
+		if float64(darkness) > s.DarkThreshold {
+			darkTries++
+			continue
+		}
+
+		rects, err := faces.Detect(gs)
+		if err != nil {
+			return nil, nil, c.errorf("face detection failed: %v", err)
+		}
+		var extraRects []face.Rect
+		if extra != nil {
+			if extraRects, err = extra.Detect(gs); err != nil {
+				return nil, nil, c.errorf("face detection failed: %v", err)
+			}
+		}
+		// Either detector seeing two faces stops it
+		if len(rects) > 1 || len(extraRects) > 1 {
+			closeCam()
+			return nil, nil, c.fail("Multiple faces detected, aborting")
+		}
+		if len(rects) == 1 && len(encs) < s.EnrollFrames {
+			enc, err := faces.Encode(raw, rects[0])
+			if err != nil {
+				return nil, nil, c.errorf("face encoding failed: %v", err)
+			}
+			encs = append(encs, enc.Descriptor)
+		}
+		if len(extraRects) == 1 && len(extraEncs) < s.EnrollFrames {
+			enc, err := extra.Encode(raw, extraRects[0])
+			if err != nil {
+				return nil, nil, c.errorf("face encoding failed: %v", err)
+			}
+			extraEncs = append(extraEncs, enc.Descriptor)
+		}
+	}
+	closeCam()
+
+	if len(encs) == 0 {
+		switch valid {
+		case 0:
+			c.say("Camera saw only black frames - is IR emitter working?")
+		case darkTries:
+			c.say("All frames were too dark, please check dark_threshold in config")
+			c.printf("Average darkness: %s, Threshold: %s\n", pyfmt.Float32(darkTotal/float32(valid)), pyfmt.Float(s.DarkThreshold))
+		default:
+			c.say("No face detected, aborting")
+		}
+		return nil, nil, 1
+	}
+	if len(encs) < min(3, s.EnrollFrames) {
+		return nil, nil, c.fail("Only saw a face in %d frames, please hold still and try again", len(encs))
+	}
+	if extra != nil && len(extraEncs) < min(3, s.EnrollFrames) {
+		return nil, nil, c.fail("%s only saw a face in %d frames, please hold still and try again", s.Recognizer, len(extraEncs))
+	}
+
+	return encs, extraEncs, 0
 }
 
 // saveSFace averages the sface descriptors and stores them under the same
