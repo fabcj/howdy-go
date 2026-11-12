@@ -88,6 +88,7 @@ check-hardening:
 install:
 	install -Dm755 bin/howdy -t $(DESTDIR)$(BINDIR)
 	install -Dm755 bin/howdy-compare -t $(DESTDIR)$(LIBEXECDIR)
+	install -Dm644 packaging/sysusers.d/howdy-go.conf $(DESTDIR)$(PREFIX)/lib/sysusers.d/howdy-go.conf
 
 clean:
 	rm -rf bin

@@ -6,6 +6,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"image"
 	"os"
 	"time"
 
@@ -151,17 +152,34 @@ func run(l paths.Layout) int {
 	if unix.Geteuid() == 0 {
 		// Started by sudo and the like: nothing past this point needs root.
 		// Writing a snapshot would, so those are off here
-		uid, gid, err := harden.Nobody()
+		uid, gid, name, err := harden.Unprivileged()
 		if err != nil {
 			return fail(compare.Abort, "%v", err)
 		}
 		if err := harden.Drop(uid, gid); err != nil {
-			return fail(compare.Abort, "dropping root failed: %v", err)
+			return fail(compare.Abort, "dropping root to %s failed: %v", name, err)
 		}
 		if snapshots {
 			fmt.Fprintln(os.Stderr, "howdy-compare: snapshots aren't saved when started as root")
 			snapshots = false
 		}
+	}
+
+	// Everything the loop needs is open or in memory now: the camera, the
+	// models, the config. Read the logo too, then shut the filesystem.
+	var logo image.Image
+	snapshotDir := ""
+	if snapshots {
+		logo = snapshot.LoadLogo(l.Logo())
+		snapshotDir = l.SnapshotsDir()
+		// Made now, so it's there for the rule; as root it isn't needed
+		_ = os.MkdirAll(snapshotDir, 0o750)
+	}
+	if err := harden.LockFilesystem(snapshotDir, harden.SnapshotAccess); err != nil {
+		if !errors.Is(err, harden.ErrNoLandlock) {
+			return fail(compare.Abort, "%v", err)
+		}
+		fmt.Fprintln(os.Stderr, "howdy-compare: no Landlock in this kernel, the frame loop keeps filesystem access")
 	}
 
 	var uts unix.Utsname
@@ -180,7 +198,6 @@ func run(l paths.Layout) int {
 		Timings:  compare.Timings{Start: start, Startup: startup, Camera: cr.took, Models: modelsTook},
 	}
 	if snapshots {
-		logo := snapshot.LoadLogo(l.Logo())
 		loop.Snapshot = func(frames []*imgproc.Gray, lines []string) {
 			img, err := snapshot.Build(frames, lines, logo)
 			if err != nil {
